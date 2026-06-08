@@ -1,0 +1,21 @@
+SPARTA synthetic full data audit
+
+Label ratios:
+- normal: 34.22%
+- risky: 35.98%
+- violated: 29.80%
+
+Passed checks:
+- 类别分布未触发极端不平衡阈值，risky/violated 数量充足。
+- train/val/test 时间范围未重叠，符合时间顺序划分。
+- node_x/link_x/service_x/sla_x 未发现 NaN 或 inf。
+- 节点数和链路数均在 v0 synthetic full 预期范围内。
+
+Potential issues:
+- risk_node 过度集中：编号 1 占 72.00%。
+- val 几乎由单一场景 link_congestion 构成，占 100.00%，模型可能学到场景标签。
+- test 几乎由单一场景 mixed 构成，占 98.98%，模型可能学到场景标签。
+- 存在多个连续场景块。若时间划分刚好切开场景，SPARTA 可能部分利用场景/时间块差异，建议后续加入跨场景混合切分或每个 split 覆盖所有场景。
+
+Interpretation note:
+- 该脚本只做数据质量审计，不代表模型效果结论。若 scenario 与 label 高度绑定，后续实验应增加更细粒度场景混合、跨场景泛化或按场景分层评估。

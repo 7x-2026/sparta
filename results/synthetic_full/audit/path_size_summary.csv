@@ -1,0 +1,7 @@
+split,kind,size,count,ratio
+train,nodes,7,47200,1.0
+train,links,10,47200,1.0
+val,nodes,7,15760,1.0
+val,links,10,15760,1.0
+test,nodes,7,15760,1.0
+test,links,10,15760,1.0

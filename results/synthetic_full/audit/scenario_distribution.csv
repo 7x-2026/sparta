@@ -1,0 +1,8 @@
+split,scenario,count,ratio
+train,burst,16000,0.3389830508474576
+train,link_congestion,80,0.001694915254237288
+train,node_overload,16000,0.3389830508474576
+train,normal,15120,0.32033898305084746
+val,link_congestion,15760,1.0
+test,link_congestion,160,0.01015228426395939
+test,mixed,15600,0.9898477157360406

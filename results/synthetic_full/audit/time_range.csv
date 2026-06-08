@@ -1,0 +1,4 @@
+split,min_time,max_time,num_samples,num_unique_times
+train,11,600,47200,590
+val,601,797,15760,197
+test,798,994,15760,197
