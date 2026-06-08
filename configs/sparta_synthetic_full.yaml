@@ -1,0 +1,87 @@
+project:
+  name: sparta_synthetic_full
+  root_dir: .
+  output_dir: results/synthetic_full
+  checkpoint_dir: checkpoints/synthetic_full
+  log_dir: logs/synthetic_full
+
+seed: 42
+
+data:
+  mode: synthetic_full
+  base_dir: data/synthetic_full
+  raw_logs_dir: data/synthetic_full/raw_logs
+  processed_dir: data/synthetic_full/processed
+  dataset_dir: data/synthetic_full/dataset
+  input_window: 12
+  pred_horizon: 5
+  max_nodes: 8
+  max_links: 12
+  node_feat_dim: 8
+  link_feat_dim: 8
+  service_feat_dim: 5
+  sla_feat_dim: 5
+  num_nodes: 8
+  num_links: 12
+  num_edge_nodes: 5
+  num_access_nodes: 2
+  num_users: 300
+  num_services: 80
+  num_steps: 1000
+  train_ratio: 0.6
+  val_ratio: 0.2
+  test_ratio: 0.2
+  train_path: data/synthetic_full/dataset/train.pkl
+  val_path: data/synthetic_full/dataset/val.pkl
+  test_path: data/synthetic_full/dataset/test.pkl
+  metadata_path: data/synthetic_full/dataset/metadata.json
+
+simulation:
+  topology: synthetic_full_v0
+  scenarios:
+    - normal
+    - burst
+    - node_overload
+    - link_congestion
+    - mixed
+  delay_cap_ms: 300.0
+  bandwidth_cap: 100.0
+  queue_cap: 50.0
+  request_cap: 100.0
+  response_cap_ms: 420.0
+
+model:
+  name: sparta
+  hidden_dim: 32
+  temporal_layers: 1
+  topology_layers: 1
+  n_heads: 2
+  ffn_dim: 128
+  dropout: 0.1
+  use_sla_gate: true
+  use_topology: true
+  use_attribution: true
+
+loss:
+  risk_loss: ce
+  lambda_node: 0.3
+  lambda_link: 0.3
+  lambda_metric: 0.2
+  ignore_attribution_for_normal: true
+  ignore_index: -100
+
+train:
+  batch_size: 64
+  epochs: 
+  lr: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  num_workers: 0
+  device: auto
+  best_metric: macro_f1
+  checkpoint_name: "{model}_best.pth"
+
+validation:
+  require_all_classes: true
+  min_risky_violated_ratio: 0.20
+  min_samples_per_class: 5

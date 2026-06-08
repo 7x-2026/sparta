@@ -1,0 +1,2 @@
+epoch,train_loss,val_loss,val_accuracy,val_macro_f1,val_risk_recall,val_violation_recall,val_node_attr_acc,val_link_attr_acc,val_metric_attr_acc
+1,0.5698718544509676,0.534158978626313,0.7237944162436548,0.730041613334234,0.7350016572754392,0.5969738651994498,nan,nan,nan
