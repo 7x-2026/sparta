@@ -1,0 +1,10 @@
+project:
+  name: sparta_debug_transformer
+  root_dir: .
+model:
+  name: transformer
+  hidden_dim: 32
+  temporal_layers: 1
+  n_heads: 2
+  ffn_dim: 128
+  dropout: 0.1

@@ -1,0 +1,4 @@
+service_id,service_type,max_delay,max_loss,min_bandwidth,reliability_req,cost_weight
+0,latency,100.0,0.05,20.0,0.99,0.2
+1,reliability,150.0,0.02,15.0,0.999,0.3
+2,cost,200.0,0.08,10.0,0.95,0.7

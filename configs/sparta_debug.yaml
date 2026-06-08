@@ -1,0 +1,83 @@
+project:
+  name: sparta_debug
+  root_dir: .
+  output_dir: results/debug
+  checkpoint_dir: checkpoints/debug
+  log_dir: logs/debug
+
+seed: 42
+
+data:
+  mode: debug
+  base_dir: data/debug
+  traces_dir: data/debug/traces
+  raw_logs_dir: data/debug/raw_logs
+  processed_dir: data/debug/processed
+  dataset_dir: data/debug/dataset
+  input_window: 4
+  pred_horizon: 2
+  max_nodes: 6
+  max_links: 8
+  node_feat_dim: 8
+  link_feat_dim: 8
+  service_feat_dim: 5
+  sla_feat_dim: 5
+  num_edge_nodes: 5
+  num_access_nodes: 2
+  num_users: 20
+  num_services: 3
+  num_steps: 200
+  train_ratio: 0.6
+  val_ratio: 0.2
+  test_ratio: 0.2
+  train_path: data/debug/dataset/train.pkl
+  val_path: data/debug/dataset/val.pkl
+  test_path: data/debug/dataset/test.pkl
+  metadata_path: data/debug/dataset/metadata.json
+
+simulation:
+  topology: small_world
+  enable_node_overload: true
+  enable_link_congestion: true
+  enable_burst: true
+  delay_cap_ms: 300.0
+  bandwidth_cap: 100.0
+  queue_cap: 50.0
+  request_cap: 100.0
+  response_cap_ms: 400.0
+
+model:
+  name: sparta
+  hidden_dim: 32
+  temporal_layers: 1
+  topology_layers: 1
+  n_heads: 2
+  ffn_dim: 128
+  dropout: 0.1
+  use_sla_gate: true
+  use_topology: true
+  use_attribution: true
+
+loss:
+  risk_loss: ce
+  lambda_node: 0.3
+  lambda_link: 0.3
+  lambda_metric: 0.2
+  ignore_attribution_for_normal: true
+  ignore_index: -100
+
+train:
+  batch_size: 8
+  epochs: 2
+  lr: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  num_workers: 0
+  device: auto
+  best_metric: macro_f1
+  checkpoint_name: "{model}_best.pth"
+
+validation:
+  require_all_classes: true
+  min_risky_violated_ratio: 0.20
+  min_samples_per_class: 5

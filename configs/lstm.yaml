@@ -1,0 +1,8 @@
+project:
+  name: sparta_debug_lstm
+  root_dir: .
+model:
+  name: lstm
+  hidden_dim: 32
+  temporal_layers: 1
+  dropout: 0.1
