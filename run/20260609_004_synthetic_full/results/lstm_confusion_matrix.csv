@@ -1,0 +1,10 @@
+true_label,true_name,pred_label,pred_name,count
+0,normal,0,normal,72
+0,normal,1,risky,11
+0,normal,2,violated,0
+1,risky,0,normal,16
+1,risky,1,risky,42
+1,risky,2,violated,0
+2,violated,0,normal,17
+2,violated,1,risky,10
+2,violated,2,violated,0

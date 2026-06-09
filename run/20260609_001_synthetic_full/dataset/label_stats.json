@@ -1,0 +1,46 @@
+{
+  "format": "pkl",
+  "schema_version": "debug_v0",
+  "input_window": 12,
+  "pred_horizon": 5,
+  "max_nodes": 8,
+  "max_links": 12,
+  "node_feat_dim": 8,
+  "link_feat_dim": 8,
+  "service_feat_dim": 5,
+  "sla_feat_dim": 5,
+  "splits": {
+    "train": {
+      "num_samples": 496,
+      "class_counts": {
+        "normal": 242,
+        "risky": 182,
+        "violated": 72
+      }
+    },
+    "val": {
+      "num_samples": 168,
+      "class_counts": {
+        "normal": 88,
+        "risky": 42,
+        "violated": 38
+      }
+    },
+    "test": {
+      "num_samples": 168,
+      "class_counts": {
+        "normal": 83,
+        "risky": 58,
+        "violated": 27
+      }
+    },
+    "all": {
+      "num_samples": 832,
+      "class_counts": {
+        "normal": 413,
+        "risky": 282,
+        "violated": 137
+      }
+    }
+  }
+}

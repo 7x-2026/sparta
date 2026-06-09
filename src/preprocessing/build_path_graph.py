@@ -248,6 +248,7 @@ def build_sample(service_id: int, time: int, logs: dict, config: dict) -> dict:
         "sample_id": f"debug_s{service_id}_t{time}",
         "service_id": int(service_id),
         "time": int(time),
+        "scenario": path_row.get("scenario", "unknown"),
         "node_x": node_x,
         "link_x": link_x,
         "service_x": service_x,

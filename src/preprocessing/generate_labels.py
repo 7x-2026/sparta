@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import sys
 from pathlib import Path
 
@@ -40,6 +41,44 @@ def _node_score(row: dict | None, queue_cap: float) -> float:
         + 0.3 * min(_f(row, "queue_len") / queue_cap, 1.0)
         + 0.3 * min(1.0 - _f(row, "available_cpu"), 1.0)
     )
+
+
+def _dominant_scenario(counts: Counter, fallback: str) -> str:
+    if counts:
+        return str(counts.most_common(1)[0][0])
+    return fallback or "unknown"
+
+
+def _choose_risk_metric(
+    metric_scores: np.ndarray,
+    scenario: str,
+    queue_abs_score: float,
+    queue_growth_score: float,
+    queue_trend: float,
+    request_trend: float,
+) -> int:
+    if scenario == "node_overload":
+        if metric_scores[3] >= 0.72 and metric_scores[3] >= 0.96 * metric_scores[2]:
+            return 3
+        if metric_scores[2] >= 0.68:
+            return 2
+
+    if scenario == "burst":
+        if request_trend >= 0.45 and queue_trend >= 0.45 and max(metric_scores[3], queue_growth_score) >= 0.70:
+            return 3
+        adjusted = metric_scores.copy()
+        adjusted[3] *= 0.85
+        return int(adjusted.argmax())
+
+    if scenario == "link_congestion":
+        link_metric_scores = {
+            0: float(metric_scores[0]),
+            1: float(metric_scores[1]),
+            4: float(metric_scores[4] + 0.05 * max(0.0, metric_scores[4] - 0.90)),
+        }
+        return max(link_metric_scores, key=link_metric_scores.get)
+
+    return int(metric_scores.argmax())
 
 
 def assign_risk_label(service_id: int, time: int, logs: dict, sla_row: dict, horizon: int, config: dict) -> int:
@@ -87,6 +126,11 @@ def assign_attribution(sample: dict, logs: dict, config: dict) -> tuple[int, int
     horizon = config["data"]["pred_horizon"]
     queue_cap = float(sim_cfg.get("queue_cap", 50.0))
     delay_cap = float(sim_cfg.get("delay_cap_ms", 300.0))
+    metric_cap = float(sim_cfg.get("metric_score_cap", 1.60))
+    queue_metric_cap = float(sim_cfg.get("queue_metric_cap", 28.0))
+    queue_growth_cap = float(sim_cfg.get("queue_growth_cap", 8.0))
+    queue_step_threshold = float(sim_cfg.get("queue_growth_step_threshold", 0.50))
+    request_step_threshold = float(sim_cfg.get("request_growth_step_threshold", 0.20))
     future = _future_times(time, horizon, config["data"]["num_steps"])
     node_scores = {node: -1.0 for node in sample["node_ids"]}
     link_scores = {link: -1.0 for link in sample["link_ids"]}
@@ -94,37 +138,65 @@ def assign_attribution(sample: dict, logs: dict, config: dict) -> tuple[int, int
     sla = logs["idx"]["sla"][service_id]
     max_delay = max(_f(sla, "max_delay"), 1e-6)
     max_loss = max(_f(sla, "max_loss"), 1e-6)
+    scenario_counts: Counter[str] = Counter()
+    queue_values: list[float] = []
+    max_queue_growth = 0.0
+    queue_increase_steps = 0
+    request_increase_steps = 0
+    prev_queue: float | None = None
+    prev_request: float | None = None
 
     for ft in future:
         service = logs["idx"]["service"].get((ft, service_id))
         path = logs["idx"]["path"].get((ft, service_id))
         if service is None or path is None:
             continue
+        scenario_counts[path.get("scenario", sample.get("scenario", "unknown"))] += 1
         path_nodes = _split_pipe(path.get("path_nodes", ""))
         path_links = _split_pipe(path.get("path_links", ""))
-        metric_scores[0] = max(metric_scores[0], _f(service, "response_time") / max_delay)
-        metric_scores[1] = max(metric_scores[1], _f(path, "path_loss") / max_loss)
+        metric_scores[0] = max(metric_scores[0], min(_f(service, "response_time") / max_delay, metric_cap))
+        metric_scores[1] = max(metric_scores[1], min(_f(path, "path_loss") / max_loss, metric_cap))
+        path_max_queue = 0.0
         for node in path_nodes:
             row = logs["idx"]["node"].get((ft, node))
             score = _node_score(row, queue_cap)
             if node in node_scores:
                 node_scores[node] = max(node_scores[node], score)
             if row:
-                metric_scores[2] = max(metric_scores[2], _f(row, "cpu_util") / 0.85)
-                metric_scores[3] = max(metric_scores[3], _f(row, "queue_len") / queue_cap)
+                metric_scores[2] = max(metric_scores[2], min(_f(row, "cpu_util") / 0.85, metric_cap))
+                path_max_queue = max(path_max_queue, _f(row, "queue_len"))
+        queue_values.append(path_max_queue)
+        if prev_queue is not None:
+            growth = path_max_queue - prev_queue
+            max_queue_growth = max(max_queue_growth, growth)
+            if growth > queue_step_threshold:
+                queue_increase_steps += 1
+        prev_queue = path_max_queue
+        request = _f(service, "request_rate")
+        if prev_request is not None and request > prev_request + request_step_threshold:
+            request_increase_steps += 1
+        prev_request = request
         for link in path_links:
             row = logs["idx"]["link"].get((ft, link))
             score = _link_score(row, delay_cap)
             if link in link_scores:
                 link_scores[link] = max(link_scores[link], score)
             if row:
-                metric_scores[4] = max(metric_scores[4], _f(row, "bandwidth_util") / 0.85)
+                metric_scores[4] = max(metric_scores[4], min(_f(row, "bandwidth_util") / 0.85, metric_cap))
+
+    denom = max(len(queue_values) - 1, 1)
+    queue_abs_score = max(queue_values, default=0.0) / max(queue_metric_cap, 1e-6)
+    queue_growth_score = max_queue_growth / max(queue_growth_cap, 1e-6)
+    queue_trend = queue_increase_steps / denom
+    request_trend = request_increase_steps / denom
+    metric_scores[3] = min(max(queue_abs_score, 0.82 * queue_abs_score + 0.18 * queue_trend), metric_cap)
 
     best_node = max(node_scores, key=node_scores.get)
     best_link = max(link_scores, key=link_scores.get)
     risk_node = sample["node_ids"].index(best_node)
     risk_link = sample["link_ids"].index(best_link)
-    risk_metric = int(metric_scores.argmax())
+    scenario = _dominant_scenario(scenario_counts, str(sample.get("scenario", "unknown")))
+    risk_metric = _choose_risk_metric(metric_scores, scenario, queue_abs_score, queue_growth_score, queue_trend, request_trend)
     return risk_node, risk_link, risk_metric, 1
 
 

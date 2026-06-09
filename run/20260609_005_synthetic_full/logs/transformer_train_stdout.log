@@ -1,0 +1,2 @@
+transformer epoch 1: train_loss=0.6710 val_macro_f1=0.7058
+Training complete for transformer

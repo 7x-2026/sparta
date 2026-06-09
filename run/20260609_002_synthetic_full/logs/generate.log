@@ -1,0 +1,16 @@
+synthetic full attempt 1/20: episodes=101, seed=42, severity_scale=1.000; validation=train normal ratio 0.258 outside [0.350, 0.550]
+synthetic full attempt 2/20: episodes=85, seed=43, severity_scale=0.965; validation=train normal ratio 0.282 outside [0.350, 0.550]
+synthetic full attempt 3/20: episodes=82, seed=44, severity_scale=0.930; validation=val normal ratio 0.321 outside [0.350, 0.550]
+synthetic full attempt 4/20: episodes=81, seed=45, severity_scale=0.895; validation=val top scenario normal ratio 0.423 > 0.400
+synthetic full attempt 5/20: episodes=87, seed=46, severity_scale=0.860; validation=val normal ratio 0.268 outside [0.350, 0.550]
+synthetic full attempt 6/20: episodes=72, seed=47, severity_scale=0.825; validation=val risky ratio 0.226 outside [0.250, 0.450]
+synthetic full attempt 7/20: episodes=75, seed=48, severity_scale=0.790; validation=val top scenario normal ratio 0.435 > 0.400
+synthetic full attempt 8/20: episodes=65, seed=49, severity_scale=0.755; validation=val normal ratio 0.577 outside [0.350, 0.550]
+synthetic full attempt 9/20: episodes=74, seed=50, severity_scale=0.720; validation=val top risk_node 1 ratio 0.566 > 0.500
+synthetic full attempt 10/20: episodes=81, seed=51, severity_scale=0.685; validation=val normal ratio 0.601 outside [0.350, 0.550]
+synthetic full attempt 11/20: episodes=84, seed=52, severity_scale=0.650; validation=ok
+Wrote 960 rows to F:\7x\SPARTA\run\20260609_002_synthetic_full\raw_logs\node_log.csv
+Wrote 1440 rows to F:\7x\SPARTA\run\20260609_002_synthetic_full\raw_logs\link_log.csv
+Wrote 960 rows to F:\7x\SPARTA\run\20260609_002_synthetic_full\raw_logs\service_log.csv
+Wrote 960 rows to F:\7x\SPARTA\run\20260609_002_synthetic_full\raw_logs\path_log.csv
+Wrote 8 rows to F:\7x\SPARTA\run\20260609_002_synthetic_full\raw_logs\sla_log.csv

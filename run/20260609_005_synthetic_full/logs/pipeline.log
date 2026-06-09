@@ -1,0 +1,33 @@
+[GENERATE][1/5] Generating raw logs...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/simulation/synthetic_full_generator.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml
+synthetic full attempt 1/20: episodes=403, seed=42, severity_scale=1.000; validation=train normal ratio 0.345 outside [0.350, 0.550]
+synthetic full attempt 2/20: episodes=383, seed=43, severity_scale=0.965; validation=ok
+Wrote 8000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\node_log.csv
+Wrote 12000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\link_log.csv
+Wrote 80000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\service_log.csv
+Wrote 80000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\path_log.csv
+Wrote 80 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\sla_log.csv
+[GENERATE][2/5] Building path graph...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/preprocessing/build_path_graph.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml
+Wrote 78720 path graph samples to F:\7x\SPARTA\run\20260609_005_synthetic_full\processed\path_graphs.pkl
+[GENERATE][3/5] Generating labels and attribution...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/preprocessing/generate_labels.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml
+Wrote 78720 labeled samples to F:\7x\SPARTA\run\20260609_005_synthetic_full\processed\samples_labeled.pkl; class counts={0: 33715, 1: 25128, 2: 19877}
+[GENERATE][4/5] Splitting dataset...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/preprocessing/split_dataset.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml
+Wrote train/val/test pkl to F:\7x\SPARTA\run\20260609_005_synthetic_full\dataset; metadata={'train': {'num_samples': 47200, 'class_counts': {'normal': 20675, 'risky': 14925, 'violated': 11600}}, 'val': {'num_samples': 15760, 'class_counts': {'normal': 6673, 'risky': 5035, 'violated': 4052}}, 'test': {'num_samples': 15760, 'class_counts': {'normal': 6367, 'risky': 5168, 'violated': 4225}}, 'all': {'num_samples': 78720, 'class_counts': {'normal': 33715, 'risky': 25128, 'violated': 19877}}}
+[AUDIT] Running synthetic full audit...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/analysis/audit_synthetic_full.py --dataset_dir F:\7x\SPARTA\run\20260609_005_synthetic_full\dataset --raw_dir F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs --output_dir F:\7x\SPARTA\run\20260609_005_synthetic_full\audit
+Wrote enhanced synthetic full audit outputs to F:\7x\SPARTA\run\20260609_005_synthetic_full\audit
+[TRAIN] Training lstm...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/train.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml --model lstm
+lstm epoch 1: train_loss=0.6843 val_macro_f1=0.7050
+Training complete for lstm
+[TRAIN] Training transformer...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/train.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml --model transformer
+transformer epoch 1: train_loss=0.6710 val_macro_f1=0.7058
+Training complete for transformer
+[TRAIN] Training sparta...
+[command] G:\Anaconda\anaconda\envs\sparta\python.exe src/train.py --config F:\7x\SPARTA\run\20260609_005_synthetic_full\config\resolved_config.yaml --model sparta
+sparta epoch 1: train_loss=1.8474 val_macro_f1=0.7104
+Training complete for sparta

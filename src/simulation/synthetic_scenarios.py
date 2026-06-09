@@ -15,6 +15,8 @@ class ScenarioState:
     noise_scale: float
     hot_edges: tuple[str, ...]
     hot_links: tuple[str, ...]
+    target_node_positions: tuple[int, ...]
+    target_link_positions: tuple[int, ...]
 
 
 def _pulse(progress: float, center: float, width: float) -> float:
@@ -35,6 +37,8 @@ def scenario_state(name: str, local_t: int, scenario_steps: int) -> ScenarioStat
             noise_scale=0.7,
             hot_edges=("edge_0",),
             hot_links=("edge_0-cloud_0",),
+            target_node_positions=(),
+            target_link_positions=(),
         )
 
     if name == "burst":
@@ -46,6 +50,8 @@ def scenario_state(name: str, local_t: int, scenario_steps: int) -> ScenarioStat
             noise_scale=1.0,
             hot_edges=("edge_1", "edge_3"),
             hot_links=("edge_0-edge_1", "edge_2-edge_3"),
+            target_node_positions=(1, 2, 3, 4),
+            target_link_positions=(0, 1, 2, 3),
         )
 
     if name == "node_overload":
@@ -57,6 +63,8 @@ def scenario_state(name: str, local_t: int, scenario_steps: int) -> ScenarioStat
             noise_scale=1.0,
             hot_edges=("edge_2", "edge_3"),
             hot_links=("edge_2-cloud_0", "edge_2-edge_3"),
+            target_node_positions=(1, 2, 3, 4),
+            target_link_positions=(0, 1, 2, 3),
         )
 
     if name == "link_congestion":
@@ -68,6 +76,8 @@ def scenario_state(name: str, local_t: int, scenario_steps: int) -> ScenarioStat
             noise_scale=1.1,
             hot_edges=("edge_0", "edge_4"),
             hot_links=("edge_4-edge_0", "edge_4-cloud_0", "edge_0-cloud_0"),
+            target_node_positions=(1, 2, 3, 4),
+            target_link_positions=(0, 1, 2, 3),
         )
 
     pulse = max(_pulse(progress, 0.32, 0.07), _pulse(progress, 0.58, 0.08), _pulse(progress, 0.84, 0.05))
@@ -78,4 +88,6 @@ def scenario_state(name: str, local_t: int, scenario_steps: int) -> ScenarioStat
         noise_scale=1.2,
         hot_edges=("edge_1", "edge_2", "edge_4"),
         hot_links=("edge_0-edge_1", "edge_2-cloud_0", "edge_4-cloud_0"),
+        target_node_positions=(1, 2, 3, 4),
+        target_link_positions=(0, 1, 2, 3),
     )

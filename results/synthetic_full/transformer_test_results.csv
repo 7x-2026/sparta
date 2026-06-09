@@ -1,2 +1,0 @@
-method,accuracy,macro_f1,risk_recall,violation_recall,auc,node_attr_acc,link_attr_acc,metric_attr_acc,inference_time_ms
-transformer,0.7911167512690356,0.7679434686987778,0.7597743629644038,0.7723041997729853,nan,nan,nan,nan,0.11868345812178498

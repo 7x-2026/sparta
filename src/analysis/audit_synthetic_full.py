@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Iterable
-
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -17,9 +13,10 @@ if str(ROOT) not in sys.path:
 from src.utils.io import ensure_dir, load_pickle, read_csv_rows, write_csv_rows
 
 
-LABEL_NAMES = {0: "normal", 1: "risky", 2: "violated"}
-METRIC_NAMES = {0: "delay", 1: "loss", 2: "cpu", 3: "queue", 4: "bandwidth", -100: "ignored"}
 SPLITS = ["train", "val", "test"]
+LABELS = {0: "normal", 1: "risky", 2: "violated"}
+SCENARIOS = ["normal", "burst", "node_overload", "link_congestion", "mixed"]
+METRICS = {0: "delay", 1: "loss", 2: "cpu", 3: "queue", 4: "bandwidth"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,7 +28,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_splits(dataset_dir: Path) -> dict[str, list[dict]]:
-    splits = {}
+    splits: dict[str, list[dict]] = {}
     for split in SPLITS:
         path = dataset_dir / f"{split}.pkl"
         if not path.exists():
@@ -44,7 +41,7 @@ def load_splits(dataset_dir: Path) -> dict[str, list[dict]]:
 
 
 def load_scenario_map(raw_dir: Path) -> dict[tuple[int, int], str]:
-    scenario_map: dict[tuple[int, int], str] = {}
+    mapping: dict[tuple[int, int], str] = {}
     for filename in ["path_log.csv", "service_log.csv"]:
         path = raw_dir / filename
         if not path.exists():
@@ -56,8 +53,8 @@ def load_scenario_map(raw_dir: Path) -> dict[tuple[int, int], str]:
                 key = (int(float(row["time"])), int(float(row["service_id"])))
             except (KeyError, TypeError, ValueError):
                 continue
-            scenario_map.setdefault(key, row["scenario"])
-    return scenario_map
+            mapping.setdefault(key, row["scenario"])
+    return mapping
 
 
 def sample_scenario(sample: dict, scenario_map: dict[tuple[int, int], str]) -> str:
@@ -67,45 +64,30 @@ def sample_scenario(sample: dict, scenario_map: dict[tuple[int, int], str]) -> s
     return scenario_map.get(key, "unknown")
 
 
+def valid_attr_samples(samples: list[dict]) -> list[dict]:
+    return [sample for sample in samples if int(sample.get("attr_mask", 0)) == 1]
+
+
+def ratio(count: int, total: int) -> float:
+    return count / total if total else math.nan
+
+
 def label_distribution_rows(splits: dict[str, list[dict]]) -> list[dict]:
     rows: list[dict] = []
     for split, samples in splits.items():
         counts = Counter(int(sample["risk_label"]) for sample in samples)
         total = len(samples)
-        for label, name in LABEL_NAMES.items():
-            count = counts.get(label, 0)
+        for label_id, label_name in LABELS.items():
+            count = counts.get(label_id, 0)
             rows.append(
                 {
                     "split": split,
-                    "label": name,
-                    "label_id": label,
+                    "label_id": label_id,
+                    "label": label_name,
                     "count": count,
-                    "ratio": count / total if total else math.nan,
+                    "ratio": ratio(count, total),
                 }
             )
-    return rows
-
-
-def attribution_distribution_rows(splits: dict[str, list[dict]]) -> list[dict]:
-    rows: list[dict] = []
-    fields = ["risk_node", "risk_link", "risk_metric"]
-    for split, samples in splits.items():
-        valid_samples = [sample for sample in samples if int(sample.get("attr_mask", 0)) == 1]
-        for field in fields:
-            counts = Counter(int(sample[field]) for sample in valid_samples)
-            total = len(valid_samples)
-            for value, count in sorted(counts.items()):
-                value_name = METRIC_NAMES.get(value, str(value)) if field == "risk_metric" else str(value)
-                rows.append(
-                    {
-                        "split": split,
-                        "field": field,
-                        "value": value,
-                        "value_name": value_name,
-                        "count": count,
-                        "ratio": count / total if total else math.nan,
-                    }
-                )
     return rows
 
 
@@ -114,208 +96,290 @@ def scenario_distribution_rows(splits: dict[str, list[dict]], scenario_map: dict
     for split, samples in splits.items():
         counts = Counter(sample_scenario(sample, scenario_map) for sample in samples)
         total = len(samples)
-        for scenario, count in sorted(counts.items()):
-            rows.append({"split": split, "scenario": scenario, "count": count, "ratio": count / total if total else math.nan})
+        scenarios = sorted(set(SCENARIOS) | set(counts))
+        for scenario in scenarios:
+            count = counts.get(scenario, 0)
+            rows.append(
+                {
+                    "split": split,
+                    "scenario": scenario,
+                    "count": count,
+                    "ratio": ratio(count, total),
+                    "present": int(count > 0),
+                }
+            )
     return rows
 
 
-def time_range_rows(splits: dict[str, list[dict]]) -> list[dict]:
+def label_by_scenario_rows(splits: dict[str, list[dict]], scenario_map: dict[tuple[int, int], str]) -> list[dict]:
     rows: list[dict] = []
     for split, samples in splits.items():
-        times = [int(sample["time"]) for sample in samples]
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for sample in samples:
+            grouped[sample_scenario(sample, scenario_map)].append(sample)
+        for scenario in sorted(set(SCENARIOS) | set(grouped)):
+            scenario_samples = grouped.get(scenario, [])
+            total = len(scenario_samples)
+            counts = Counter(int(sample["risk_label"]) for sample in scenario_samples)
+            for label_id, label_name in LABELS.items():
+                count = counts.get(label_id, 0)
+                rows.append(
+                    {
+                        "split": split,
+                        "scenario": scenario,
+                        "label_id": label_id,
+                        "label": label_name,
+                        "count": count,
+                        "ratio_within_scenario": ratio(count, total),
+                    }
+                )
+    return rows
+
+
+def attribution_distribution_rows(splits: dict[str, list[dict]]) -> list[dict]:
+    rows: list[dict] = []
+    for split, samples in splits.items():
+        valid = valid_attr_samples(samples)
+        for field in ["risk_node", "risk_link", "risk_metric"]:
+            counts = Counter(int(sample[field]) for sample in valid)
+            total = len(valid)
+            values = sorted(counts)
+            if field == "risk_metric":
+                values = sorted(set(METRICS) | set(values))
+            for value in values:
+                count = counts.get(value, 0)
+                rows.append(
+                    {
+                        "split": split,
+                        "field": field,
+                        "value": value,
+                        "value_name": METRICS.get(value, str(value)) if field == "risk_metric" else str(value),
+                        "count": count,
+                        "ratio": ratio(count, total),
+                    }
+                )
+    return rows
+
+
+def majority_accuracy(samples: list[dict], field: str) -> tuple[int | str, float, int, int]:
+    valid = valid_attr_samples(samples)
+    if not valid:
+        return "", math.nan, 0, 0
+    counts = Counter(int(sample[field]) for sample in valid)
+    majority_value, majority_count = counts.most_common(1)[0]
+    return majority_value, majority_count / len(valid), majority_count, len(valid)
+
+
+def attribution_majority_baseline_rows(splits: dict[str, list[dict]]) -> list[dict]:
+    rows: list[dict] = []
+    all_samples = [sample for split in SPLITS for sample in splits[split]]
+    for split, samples in {**splits, "all": all_samples}.items():
+        node_value, node_acc, node_count, total = majority_accuracy(samples, "risk_node")
+        link_value, link_acc, link_count, _ = majority_accuracy(samples, "risk_link")
+        metric_value, metric_acc, metric_count, _ = majority_accuracy(samples, "risk_metric")
         rows.append(
             {
                 "split": split,
-                "min_time": min(times) if times else "",
-                "max_time": max(times) if times else "",
-                "num_samples": len(samples),
-                "num_unique_times": len(set(times)),
+                "valid_attr_samples": total,
+                "node_majority_value": node_value,
+                "node_majority_acc": node_acc,
+                "node_majority_count": node_count,
+                "link_majority_value": link_value,
+                "link_majority_acc": link_acc,
+                "link_majority_count": link_count,
+                "metric_majority_value": metric_value,
+                "metric_majority_name": METRICS.get(metric_value, str(metric_value)) if metric_value != "" else "",
+                "metric_majority_acc": metric_acc,
+                "metric_majority_count": metric_count,
             }
         )
     return rows
 
 
-def _array_summary(arrays: Iterable[np.ndarray]) -> dict:
-    arr = np.concatenate([np.asarray(a, dtype=np.float64).reshape(-1) for a in arrays])
-    finite = np.isfinite(arr)
-    finite_arr = arr[finite]
-    return {
-        "mean": float(finite_arr.mean()) if finite_arr.size else math.nan,
-        "std": float(finite_arr.std()) if finite_arr.size else math.nan,
-        "min": float(finite_arr.min()) if finite_arr.size else math.nan,
-        "max": float(finite_arr.max()) if finite_arr.size else math.nan,
-        "nan_count": int(np.isnan(arr).sum()),
-        "inf_count": int(np.isinf(arr).sum()),
-        "num_values": int(arr.size),
-    }
-
-
-def feature_summary_rows(splits: dict[str, list[dict]]) -> list[dict]:
-    rows: list[dict] = []
-    for split, samples in splits.items():
-        for field in ["node_x", "link_x", "service_x", "sla_x"]:
-            summary = _array_summary(sample[field] for sample in samples)
-            rows.append({"split": split, "feature": field, **summary})
-    return rows
-
-
-def path_size_summary_rows(splits: dict[str, list[dict]]) -> list[dict]:
-    rows: list[dict] = []
-    for split, samples in splits.items():
-        node_counts = Counter(int(np.asarray(sample["node_mask"]).sum()) for sample in samples)
-        link_counts = Counter(int(np.asarray(sample["link_mask"]).sum()) for sample in samples)
-        for size, count in sorted(node_counts.items()):
-            rows.append({"split": split, "kind": "nodes", "size": size, "count": count, "ratio": count / len(samples) if samples else math.nan})
-        for size, count in sorted(link_counts.items()):
-            rows.append({"split": split, "kind": "links", "size": size, "count": count, "ratio": count / len(samples) if samples else math.nan})
-    return rows
-
-
-def _label_issue(label_rows: list[dict]) -> tuple[list[str], dict[str, float]]:
-    all_counts = Counter()
+def split_label_ratios(label_rows: list[dict]) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = defaultdict(dict)
     for row in label_rows:
-        all_counts[row["label"]] += int(row["count"])
-    total = sum(all_counts.values())
-    ratios = {label: count / total if total else 0.0 for label, count in all_counts.items()}
-    issues = []
-    if ratios and max(ratios.values()) > 0.80:
-        issues.append(f"类别极端不平衡：最大类别占比 {max(ratios.values()):.2%}。")
-    risky_violated_ratio = ratios.get("risky", 0.0) + ratios.get("violated", 0.0)
-    if ratios.get("risky", 0.0) < 0.05 or ratios.get("violated", 0.0) < 0.05:
-        issues.append(f"risky 或 violated 过少：risky={ratios.get('risky', 0.0):.2%}, violated={ratios.get('violated', 0.0):.2%}。")
-    elif risky_violated_ratio < 0.20:
-        issues.append(f"risky/violated 总占比偏低：{risky_violated_ratio:.2%}。")
-    return issues, ratios
+        out[row["split"]][row["label"]] = float(row["ratio"])
+    return out
 
 
-def _concentration_issue(attr_rows: list[dict]) -> list[str]:
-    issues = []
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for row in attr_rows:
-        grouped[row["field"]].append(row)
-    for field in ["risk_node", "risk_link"]:
-        rows = grouped.get(field, [])
-        if not rows:
-            issues.append(f"{field} 没有有效归因样本。")
-            continue
-        total_by_value = Counter()
-        for row in rows:
-            total_by_value[int(row["value"])] += int(row["count"])
-        total = sum(total_by_value.values())
-        value, count = total_by_value.most_common(1)[0]
-        ratio = count / total if total else 0.0
-        if ratio > 0.70:
-            issues.append(f"{field} 过度集中：编号 {value} 占 {ratio:.2%}。")
-    return issues
-
-
-def _time_overlap_issue(time_rows: list[dict]) -> list[str]:
-    ranges = {row["split"]: (int(row["min_time"]), int(row["max_time"])) for row in time_rows if row["min_time"] != ""}
-    issues = []
-    pairs = [("train", "val"), ("val", "test"), ("train", "test")]
-    for left, right in pairs:
-        if left not in ranges or right not in ranges:
-            continue
-        l_min, l_max = ranges[left]
-        r_min, r_max = ranges[right]
-        if max(l_min, r_min) <= min(l_max, r_max):
-            issues.append(f"{left}/{right} 时间范围重叠：{ranges[left]} vs {ranges[right]}。")
-    ordered = ["train", "val", "test"]
-    if all(split in ranges for split in ordered):
-        if not (ranges["train"][1] < ranges["val"][0] <= ranges["val"][1] < ranges["test"][0]):
-            issues.append(f"时间划分不是严格递增：train={ranges['train']}, val={ranges['val']}, test={ranges['test']}。")
-    return issues
-
-
-def _feature_issue(feature_rows: list[dict]) -> list[str]:
-    issues = []
-    bad = [row for row in feature_rows if int(row["nan_count"]) > 0 or int(row["inf_count"]) > 0]
-    for row in bad:
-        issues.append(f"{row['split']} {row['feature']} 存在 NaN/inf：nan={row['nan_count']}, inf={row['inf_count']}。")
-    return issues
-
-
-def _path_size_issue(path_rows: list[dict]) -> list[str]:
-    issues = []
-    for row in path_rows:
-        size = int(row["size"])
-        if row["kind"] == "nodes" and (size <= 0 or size > 8):
-            issues.append(f"{row['split']} 节点数异常：Np={size}。")
-        if row["kind"] == "links" and (size <= 0 or size > 12):
-            issues.append(f"{row['split']} 链路数异常：Ep={size}。")
-    return issues
-
-
-def _scenario_shortcut_issue(scenario_rows: list[dict], label_rows: list[dict]) -> list[str]:
-    issues = []
-    scenarios = {row["scenario"] for row in scenario_rows if row["scenario"] != "unknown"}
-    if not scenarios:
-        return ["样本没有 scenario 字段，且 raw logs 无法映射 scenario；暂不能判断场景捷径风险。"]
-    split_scenario_counts = defaultdict(Counter)
+def split_scenario_ratios(scenario_rows: list[dict]) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = defaultdict(dict)
     for row in scenario_rows:
-        split_scenario_counts[row["split"]][row["scenario"]] += int(row["count"])
-    for split, counts in split_scenario_counts.items():
-        total = sum(counts.values())
-        if total and counts.most_common(1)[0][1] / total > 0.85:
-            scenario, count = counts.most_common(1)[0]
-            issues.append(f"{split} 几乎由单一场景 {scenario} 构成，占 {count / total:.2%}，模型可能学到场景标签。")
-    if len(scenarios) >= 3:
-        issues.append(
-            "存在多个连续场景块。若时间划分刚好切开场景，SPARTA 可能部分利用场景/时间块差异，建议后续加入跨场景混合切分或每个 split 覆盖所有场景。"
+        out[row["split"]][row["scenario"]] = float(row["ratio"])
+    return out
+
+
+def split_shift_report_rows(label_rows: list[dict], scenario_rows: list[dict], attr_rows: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    label_ratios = split_label_ratios(label_rows)
+    scenario_ratios = split_scenario_ratios(scenario_rows)
+
+    train_violated = label_ratios["train"].get("violated", 0.0)
+    test_violated = label_ratios["test"].get("violated", 0.0)
+    rows.append(
+        {
+            "check": "high_label_shift",
+            "status": "fail" if test_violated - train_violated > 0.20 else "pass",
+            "detail": f"test violated ratio - train violated ratio = {test_violated - train_violated:.4f}",
+            "value": test_violated - train_violated,
+            "threshold": 0.20,
+        }
+    )
+
+    for label in LABELS.values():
+        values = [label_ratios[split].get(label, 0.0) for split in SPLITS]
+        spread = max(values) - min(values)
+        rows.append(
+            {
+                "check": f"label_ratio_spread_{label}",
+                "status": "fail" if spread > 0.20 else "pass",
+                "detail": f"{label} ratio spread across train/val/test = {spread:.4f}",
+                "value": spread,
+                "threshold": 0.20,
+            }
         )
-    return issues
+
+    for split in SPLITS:
+        missing = [scenario for scenario in SCENARIOS if scenario_ratios[split].get(scenario, 0.0) == 0.0]
+        max_scenario = max(scenario_ratios[split].items(), key=lambda item: item[1]) if scenario_ratios[split] else ("", 0.0)
+        rows.append(
+            {
+                "check": f"scenario_coverage_{split}",
+                "status": "fail" if missing else "pass",
+                "detail": "missing=" + "|".join(missing) if missing else "all scenarios present",
+                "value": len(missing),
+                "threshold": 0,
+            }
+        )
+        rows.append(
+            {
+                "check": f"scenario_block_bias_{split}",
+                "status": "fail" if max_scenario[1] > 0.45 else "pass",
+                "detail": f"top scenario {max_scenario[0]} ratio = {max_scenario[1]:.4f}",
+                "value": max_scenario[1],
+                "threshold": 0.45,
+            }
+        )
+
+    attr_grouped: dict[str, Counter] = {"risk_node": Counter(), "risk_link": Counter(), "risk_metric": Counter()}
+    for row in attr_rows:
+        attr_grouped[row["field"]][row["value"]] += int(row["count"])
+    for field, check_name in [("risk_node", "node_attribution_concentration"), ("risk_link", "link_attribution_concentration")]:
+        total = sum(attr_grouped[field].values())
+        top_value, top_count = attr_grouped[field].most_common(1)[0] if total else ("", 0)
+        top_ratio = top_count / total if total else math.nan
+        rows.append(
+            {
+                "check": check_name,
+                "status": "fail" if total and top_ratio > 0.50 else "pass",
+                "detail": f"top {field}={top_value}, ratio={top_ratio:.4f}" if total else "no valid attribution samples",
+                "value": top_ratio,
+                "threshold": 0.50,
+            }
+        )
+
+    metric_total = sum(attr_grouped["risk_metric"].values())
+    for metric_id, metric_name in METRICS.items():
+        metric_ratio = attr_grouped["risk_metric"].get(metric_id, 0) / metric_total if metric_total else 0.0
+        rows.append(
+            {
+                "check": f"metric_coverage_{metric_name}",
+                "status": "fail" if metric_ratio == 0.0 else "pass",
+                "detail": f"{metric_name} ratio = {metric_ratio:.4f}",
+                "value": metric_ratio,
+                "threshold": ">0",
+            }
+        )
+    metric_by_split: dict[str, Counter] = {split: Counter() for split in SPLITS}
+    for row in attr_rows:
+        if row["field"] == "risk_metric":
+            metric_by_split[row["split"]][int(row["value"])] += int(row["count"])
+    for split in SPLITS:
+        split_total = sum(metric_by_split[split].values())
+        for metric_id, metric_name in METRICS.items():
+            split_metric_ratio = metric_by_split[split].get(metric_id, 0) / split_total if split_total else 0.0
+            rows.append(
+                {
+                    "check": f"metric_coverage_{split}_{metric_name}",
+                    "status": "fail" if split_metric_ratio == 0.0 else "pass",
+                    "detail": f"{split} {metric_name} ratio = {split_metric_ratio:.4f}",
+                    "value": split_metric_ratio,
+                    "threshold": ">0",
+                }
+            )
+        queue_ratio = metric_by_split[split].get(3, 0) / split_total if split_total else 0.0
+        rows.append(
+            {
+                "check": f"queue_metric_min_ratio_{split}",
+                "status": "fail" if queue_ratio < 0.05 else "pass",
+                "detail": f"{split} queue ratio = {queue_ratio:.4f}",
+                "value": queue_ratio,
+                "threshold": 0.05,
+            }
+        )
+    return rows
 
 
-def write_audit_report(
-    output_path: Path,
-    label_rows: list[dict],
-    attr_rows: list[dict],
-    scenario_rows: list[dict],
-    time_rows: list[dict],
-    feature_rows: list[dict],
-    path_rows: list[dict],
-) -> None:
-    issues = []
-    label_issues, ratios = _label_issue(label_rows)
-    issues.extend(label_issues)
-    issues.extend(_concentration_issue(attr_rows))
-    issues.extend(_time_overlap_issue(time_rows))
-    issues.extend(_feature_issue(feature_rows))
-    issues.extend(_path_size_issue(path_rows))
-    issues.extend(_scenario_shortcut_issue(scenario_rows, label_rows))
+def report_passed(shift_rows: list[dict]) -> bool:
+    return all(row["status"] == "pass" for row in shift_rows)
 
-    ok_lines = []
-    if not label_issues:
-        ok_lines.append("类别分布未触发极端不平衡阈值，risky/violated 数量充足。")
-    if not _time_overlap_issue(time_rows):
-        ok_lines.append("train/val/test 时间范围未重叠，符合时间顺序划分。")
-    if not _feature_issue(feature_rows):
-        ok_lines.append("node_x/link_x/service_x/sla_x 未发现 NaN 或 inf。")
-    if not _path_size_issue(path_rows):
-        ok_lines.append("节点数和链路数均在 v0 synthetic full 预期范围内。")
+
+def write_report(output_path: Path, label_rows: list[dict], scenario_rows: list[dict], majority_rows: list[dict], shift_rows: list[dict]) -> None:
+    label_ratios = split_label_ratios(label_rows)
+    scenario_ratios = split_scenario_ratios(scenario_rows)
+    passed = report_passed(shift_rows)
+    failed = [row for row in shift_rows if row["status"] == "fail"]
+    all_majority = next(row for row in majority_rows if row["split"] == "all")
 
     lines = [
-        "SPARTA synthetic full data audit",
+        "SPARTA synthetic full 数据审计报告",
         "",
-        "Label ratios:",
-        *(f"- {label}: {ratio:.2%}" for label, ratio in sorted(ratios.items())),
+        f"结论：{'通过正式实验数据要求' if passed else '未通过正式实验数据要求'}。",
         "",
-        "Passed checks:",
-        *(f"- {line}" for line in ok_lines),
-        "",
-        "Potential issues:",
+        "标签分布：",
     ]
-    if issues:
-        lines.extend(f"- {issue}" for issue in issues)
-    else:
-        lines.append("- 未发现明显数据质量问题。")
+    for split in SPLITS:
+        ratios = label_ratios[split]
+        lines.append(
+            f"- {split}: normal={ratios.get('normal', 0.0):.2%}, "
+            f"risky={ratios.get('risky', 0.0):.2%}, violated={ratios.get('violated', 0.0):.2%}"
+        )
+
+    lines.extend(["", "场景分布："])
+    for split in SPLITS:
+        parts = [f"{scenario}={scenario_ratios[split].get(scenario, 0.0):.2%}" for scenario in SCENARIOS]
+        lines.append(f"- {split}: " + ", ".join(parts))
+
     lines.extend(
         [
             "",
-            "Interpretation note:",
-            "- 该脚本只做数据质量审计，不代表模型效果结论。若 scenario 与 label 高度绑定，后续实验应增加更细粒度场景混合、跨场景泛化或按场景分层评估。",
+            "归因 majority baseline：",
+            f"- node_majority_acc={float(all_majority['node_majority_acc']):.2%}, "
+            f"link_majority_acc={float(all_majority['link_majority_acc']):.2%}, "
+            f"metric_majority_acc={float(all_majority['metric_majority_acc']):.2%}",
+            "",
+            "失败项：" if failed else "未发现失败项：",
         ]
     )
+    if failed:
+        lines.extend(f"- {row['check']}: {row['detail']}" for row in failed)
+    else:
+        lines.append("- 所有核心审计规则均通过。")
+
+    lines.extend(
+        [
+            "",
+            "中文总结：",
+        ]
+    )
+    if passed:
+        lines.append("当前 synthetic full 数据在标签分布、场景覆盖、归因分布和 split shift 上满足正式实验数据的最低要求。")
+    else:
+        lines.append(
+            "当前 synthetic full 数据暂不建议作为正式实验数据直接使用。优先修复 split 间标签比例漂移、场景块偏置或归因类别过度集中问题，"
+            "否则模型可能学到场景标签或固定瓶颈编号，而不是学习 SLA 风险随时间演化的规律。"
+        )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -327,22 +391,21 @@ def main() -> None:
 
     splits = load_splits(dataset_dir)
     scenario_map = load_scenario_map(raw_dir)
-
     label_rows = label_distribution_rows(splits)
-    attr_rows = attribution_distribution_rows(splits)
     scenario_rows = scenario_distribution_rows(splits, scenario_map)
-    time_rows = time_range_rows(splits)
-    feature_rows = feature_summary_rows(splits)
-    path_rows = path_size_summary_rows(splits)
+    label_scenario_rows = label_by_scenario_rows(splits, scenario_map)
+    attr_rows = attribution_distribution_rows(splits)
+    majority_rows = attribution_majority_baseline_rows(splits)
+    shift_rows = split_shift_report_rows(label_rows, scenario_rows, attr_rows)
 
     write_csv_rows(output_dir / "label_distribution.csv", label_rows)
-    write_csv_rows(output_dir / "attribution_distribution.csv", attr_rows)
     write_csv_rows(output_dir / "scenario_distribution.csv", scenario_rows)
-    write_csv_rows(output_dir / "time_range.csv", time_rows)
-    write_csv_rows(output_dir / "feature_summary.csv", feature_rows)
-    write_csv_rows(output_dir / "path_size_summary.csv", path_rows)
-    write_audit_report(output_dir / "audit_report.txt", label_rows, attr_rows, scenario_rows, time_rows, feature_rows, path_rows)
-    print(f"Wrote synthetic full audit outputs to {output_dir}")
+    write_csv_rows(output_dir / "label_by_scenario.csv", label_scenario_rows)
+    write_csv_rows(output_dir / "attribution_distribution.csv", attr_rows)
+    write_csv_rows(output_dir / "attribution_majority_baseline.csv", majority_rows)
+    write_csv_rows(output_dir / "split_shift_report.csv", shift_rows)
+    write_report(output_dir / "audit_report.txt", label_rows, scenario_rows, majority_rows, shift_rows)
+    print(f"Wrote enhanced synthetic full audit outputs to {output_dir}")
 
 
 if __name__ == "__main__":
