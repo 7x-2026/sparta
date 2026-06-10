@@ -24,8 +24,11 @@
     "split_dataset",
     "audit",
     "train",
-    "eval"
+    "eval",
+    "supplement_eval_outputs"
   ],
   "missing_outputs": [],
-  "error": null
+  "error": null,
+  "last_eval_supplement_backup": "F:\\7x\\SPARTA\\run\\20260609_005_synthetic_full\\artifacts\\eval_supplement_backup_20260610_203608",
+  "last_eval_supplemented_at": "2026-06-10 20:36:18"
 }

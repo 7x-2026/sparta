@@ -24,6 +24,7 @@ from src.utils.seed import set_seed
 
 RESULT_COLUMNS = [
     "method",
+    "has_attribution_head",
     "accuracy",
     "macro_f1",
     "risk_recall",
@@ -34,6 +35,7 @@ RESULT_COLUMNS = [
     "metric_attr_acc",
     "inference_time_ms",
 ]
+ATTR_COLUMNS = {"node_attr_acc", "link_attr_acc", "metric_attr_acc"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,12 +52,21 @@ def _format_value(value):
     return value
 
 
+def _format_row(row: dict) -> dict:
+    formatted = {key: _format_value(row.get(key, math.nan)) for key in RESULT_COLUMNS}
+    if not bool(row.get("has_attribution_head", False)):
+        for key in ATTR_COLUMNS:
+            formatted[key] = "N/A"
+    formatted["has_attribution_head"] = "true" if bool(row.get("has_attribution_head", False)) else "false"
+    return formatted
+
+
 def write_result(path: Path, row: dict) -> None:
     ensure_dir(path.parent)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=RESULT_COLUMNS)
         writer.writeheader()
-        writer.writerow({key: _format_value(row.get(key, math.nan)) for key in RESULT_COLUMNS})
+        writer.writerow(_format_row(row))
 
 
 def update_all_results(output_dir: Path) -> None:
@@ -65,12 +76,21 @@ def update_all_results(output_dir: Path) -> None:
         if path.exists():
             with path.open("r", newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
-                rows.extend(reader)
+                for row in reader:
+                    method = row.get("method", model_name)
+                    has_attr = str(row.get("has_attribution_head", "")).lower() == "true" or method == "sparta"
+                    row["method"] = method
+                    row["has_attribution_head"] = "true" if has_attr else "false"
+                    if not has_attr:
+                        for key in ATTR_COLUMNS:
+                            row[key] = "N/A"
+                    rows.append(row)
     if rows:
         with (output_dir / "all_test_results.csv").open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=RESULT_COLUMNS)
             writer.writeheader()
-            writer.writerows(rows)
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in RESULT_COLUMNS})
 
 
 @torch.no_grad()
@@ -101,6 +121,7 @@ def evaluate_once(config: dict, model_name: str, checkpoint_path: str | Path | N
     metrics = compute_classification_metrics(labels["risk_label"], preds["risk_label"])
     metrics.update(compute_attribution_metrics(labels, preds, has_attr))
     metrics["method"] = model_name
+    metrics["has_attribution_head"] = bool(has_attr)
     metrics["inference_time_ms"] = (elapsed / max(len(dataset), 1)) * 1000.0
     return metrics
 
