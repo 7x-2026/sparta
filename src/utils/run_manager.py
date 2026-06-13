@@ -105,9 +105,13 @@ def build_initial_manifest(run_dir: Path, config: dict, config_path: str | Path,
     run_dir = Path(run_dir)
     run_id = run_dir.name
     experiment_cfg = config.get("experiment", {})
+    data_cfg = config.get("data", {})
+    edge_cfg = config.get("edgesimpy", {})
     experiment_name = experiment_cfg.get("name") or config.get("project", {}).get("name", "synthetic_full")
     data_seed = int(experiment_cfg.get("data_seed", experiment_cfg.get("seed", config.get("seed", 42))))
     train_seed = int(experiment_cfg.get("train_seed", experiment_cfg.get("seed", config.get("seed", 42))))
+    data_source = data_cfg.get("source", data_cfg.get("mode", "synthetic_full"))
+    simulator_backend = edge_cfg.get("backend", "edgesimpy_stub") if data_source == "edgesimpy" else "synthetic_full"
     return {
         "run_id": run_id,
         "experiment_name": experiment_name,
@@ -126,6 +130,12 @@ def build_initial_manifest(run_dir: Path, config: dict, config_path: str | Path,
         "result_dir": str(run_dir / "results"),
         "audit_dir": str(run_dir / "audit"),
         "log_dir": str(run_dir / "logs"),
+        "data_source": data_source,
+        "simulator_backend": simulator_backend,
+        "raw_log_schema_version": "v1",
+        "edgesimpy_installed": None,
+        "edgesimpy_import_error": None,
+        "edgesimpy_config": edge_cfg,
         "models": ["lstm", "transformer", "sparta"],
         "completed_stages": [],
         "missing_outputs": [],

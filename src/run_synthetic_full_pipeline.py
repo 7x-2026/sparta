@@ -157,6 +157,17 @@ def train_seed(config: dict) -> int:
     return int(experiment_cfg.get("train_seed", experiment_cfg.get("seed", config.get("seed", 42))))
 
 
+def data_source(config: dict) -> str:
+    data_cfg = config.get("data", {})
+    return str(data_cfg.get("source", data_cfg.get("mode", "synthetic_full")))
+
+
+def simulator_backend(config: dict) -> str:
+    if data_source(config) == "edgesimpy":
+        return str(config.get("edgesimpy", {}).get("backend", "edgesimpy_stub"))
+    return "synthetic_full"
+
+
 def persist_run_config_and_manifest(run_dir: Path, config_path: str | Path, config: dict, mode: str, new_run: bool) -> Path:
     copy_config_to_run(config_path, run_dir, config)
     manifest = build_initial_manifest(run_dir, config, config_path, mode)
@@ -179,6 +190,10 @@ def persist_run_config_and_manifest(run_dir: Path, config_path: str | Path, conf
                 "checkpoint_dir": str(run_dir / "checkpoints"),
                 "result_dir": str(run_dir / "results"),
                 "audit_dir": str(run_dir / "audit"),
+                "data_source": data_source(config),
+                "simulator_backend": simulator_backend(config),
+                "raw_log_schema_version": "v1",
+                "edgesimpy_config": config.get("edgesimpy", {}),
                 "completed_stages": completed,
                 "error": None,
             }
@@ -292,10 +307,53 @@ def run_audit(run_dir: Path, config: dict) -> None:
     mark_stage(run_dir, "audit")
 
 
+def run_raw_log_schema_check(run_dir: Path, config: dict) -> None:
+    py = sys.executable
+    raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
+    run_step(
+        "[schema] Checking raw log schema...",
+        [
+            py,
+            "src/analysis/check_raw_log_schema.py",
+            "--raw_dir",
+            str(raw_dir),
+        ],
+    )
+    mark_stage(run_dir, "check_raw_log_schema")
+
+
+def run_raw_log_generation(run_dir: Path, config_path: Path, config: dict) -> None:
+    source = data_source(config)
+    if source == "synthetic_full":
+        run_step("[1/6] Generating raw logs...", [sys.executable, "src/simulation/synthetic_full_generator.py", "--config", str(config_path)])
+        update_run_manifest(
+            run_dir,
+            {
+                "data_source": "synthetic_full",
+                "simulator_backend": "synthetic_full",
+                "raw_log_schema_version": "v1",
+                "edgesimpy_installed": None,
+                "edgesimpy_import_error": None,
+                "edgesimpy_config": {},
+            },
+        )
+        return
+    if source == "edgesimpy":
+        print("[1/6] Generating raw logs...", flush=True)
+        from src.simulation.edgesimpy_adapter import run_edgesimpy_adapter
+
+        raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
+        metadata = run_edgesimpy_adapter(config, raw_dir)
+        update_run_manifest(run_dir, metadata)
+        return
+    raise ValueError(f"Unsupported data.source: {source}")
+
+
 def run_generate_pipeline(run_dir: Path, config_path: Path, config: dict) -> None:
     py = sys.executable
-    run_step("[1/6] Generating raw logs...", [py, "src/simulation/synthetic_full_generator.py", "--config", str(config_path)])
+    run_raw_log_generation(run_dir, config_path, config)
     mark_stage(run_dir, "generate_raw_logs")
+    run_raw_log_schema_check(run_dir, config)
     run_step("[2/6] Building path graph...", [py, "src/preprocessing/build_path_graph.py", "--config", str(config_path)])
     mark_stage(run_dir, "build_path_graph")
     run_step("[3/6] Generating labels...", [py, "src/preprocessing/generate_labels.py", "--config", str(config_path)])

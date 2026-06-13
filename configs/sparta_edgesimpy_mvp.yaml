@@ -1,14 +1,14 @@
 project:
-  name: sparta_synthetic_full
+  name: sparta_edgesimpy_mvp
   root_dir: .
-  output_dir: results/synthetic_full
-  checkpoint_dir: checkpoints/synthetic_full
-  log_dir: logs/synthetic_full
+  output_dir: results/edgesimpy_mvp
+  checkpoint_dir: checkpoints/edgesimpy_mvp
+  log_dir: logs/edgesimpy_mvp
 
 seed: 42
 
 experiment:
-  name: synthetic_full
+  name: edgesimpy_mvp
   data_seed: 42
   train_seed: 0
 
@@ -32,12 +32,14 @@ paths:
   log_dir: null
 
 data:
-  source: synthetic_full
-  mode: synthetic_full
-  base_dir: data/synthetic_full
-  raw_logs_dir: data/synthetic_full/raw_logs
-  processed_dir: data/synthetic_full/processed
-  dataset_dir: data/synthetic_full/dataset
+  source: edgesimpy
+  mode: edgesimpy
+  base_dir: data/edgesimpy_mvp
+  raw_logs_dir: data/edgesimpy_mvp/raw_logs
+  processed_dir: data/edgesimpy_mvp/processed
+  dataset_dir: data/edgesimpy_mvp/dataset
+  window: 12
+  horizon: 5
   input_window: 12
   pred_horizon: 5
   max_nodes: 8
@@ -50,38 +52,50 @@ data:
   num_links: 12
   num_edge_nodes: 5
   num_access_nodes: 2
-  num_users: 300
-  num_services: 80
-  num_steps: 1000
+  num_users: 50
+  num_services: 30
+  num_steps: 300
   train_ratio: 0.6
   val_ratio: 0.2
   test_ratio: 0.2
-  train_path: data/synthetic_full/dataset/train.pkl
-  val_path: data/synthetic_full/dataset/val.pkl
-  test_path: data/synthetic_full/dataset/test.pkl
-  metadata_path: data/synthetic_full/dataset/metadata.json
+  train_path: data/edgesimpy_mvp/dataset/train.pkl
+  val_path: data/edgesimpy_mvp/dataset/val.pkl
+  test_path: data/edgesimpy_mvp/dataset/test.pkl
+  metadata_path: data/edgesimpy_mvp/dataset/metadata.json
+
+edgesimpy:
+  backend: edgesimpy_stub
+  num_steps: 300
+  num_edge_nodes: 5
+  num_access_nodes: 3
+  num_cloud_nodes: 1
+  num_users: 50
+  num_services: 30
+  topology: small_world
+  enable_mobility: false
+  enable_trace: false
 
 simulation:
-  topology: synthetic_full_v0
+  topology: small_world
   scenario_schedule: interleaved
-  max_scenario_ratio_per_split: 0.40
-  max_attribution_majority_ratio: 0.50
+  max_scenario_ratio_per_split: 0.45
+  max_attribution_majority_ratio: 0.55
   target_label_ratio:
     normal: 0.45
     risky: 0.35
     violated: 0.20
   allowed_label_ratio_range:
-    normal: [0.35, 0.55]
-    risky: [0.25, 0.45]
-    violated: [0.10, 0.30]
+    normal: [0.20, 0.70]
+    risky: [0.05, 0.60]
+    violated: [0.02, 0.45]
   split_balance_check:
     enabled: true
-    max_label_ratio_gap: 0.15
-    max_scenario_ratio_per_split: 0.40
-    max_top_node_attr_ratio: 0.50
-    max_top_link_attr_ratio: 0.50
+    max_label_ratio_gap: 0.30
+    max_scenario_ratio_per_split: 0.55
+    max_top_node_attr_ratio: 0.70
+    max_top_link_attr_ratio: 0.70
     min_metric_ratio:
-      queue: 0.05
+      queue: 0.0
   generation_retry:
     enabled: true
     max_retries: 20
@@ -96,7 +110,6 @@ simulation:
   queue_cap: 50.0
   queue_metric_cap: 28.0
   queue_growth_cap: 8.0
-  min_queue_metric_ratio_per_split: 0.05
   request_cap: 100.0
   response_cap_ms: 420.0
 
@@ -121,8 +134,8 @@ loss:
   ignore_index: -100
 
 train:
-  batch_size: 64
-  epochs: 1
+  batch_size: 32
+  epochs: 3
   lr: 0.001
   weight_decay: 0.0001
   grad_clip: 1.0
@@ -133,5 +146,5 @@ train:
 
 validation:
   require_all_classes: true
-  min_risky_violated_ratio: 0.20
-  min_samples_per_class: 5
+  min_risky_violated_ratio: 0.15
+  min_samples_per_class: 1

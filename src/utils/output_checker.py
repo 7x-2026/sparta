@@ -34,6 +34,7 @@ REQUIRED_OUTPUTS_GENERATE = [
     "raw_logs/service_log.csv",
     "raw_logs/path_log.csv",
     "raw_logs/sla_log.csv",
+    "raw_logs/check_raw_log_schema_report.txt",
     "processed/path_graphs.pkl",
     "processed/labeled_samples.pkl",
     "processed/attributed_samples.pkl",
