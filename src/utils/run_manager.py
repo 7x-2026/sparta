@@ -57,7 +57,9 @@ def copy_config_to_run(config_path: str | Path, run_dir: Path, resolved_config: 
     config_dir = ensure_dir(Path(run_dir) / "config")
     src = Path(config_path)
     if src.exists():
-        shutil.copy2(src, config_dir / src.name)
+        dst = config_dir / src.name
+        if src.resolve() != dst.resolve():
+            shutil.copy2(src, dst)
     with (config_dir / "resolved_config.yaml").open("w", encoding="utf-8") as f:
         yaml.safe_dump(resolved_config, f, sort_keys=False, allow_unicode=True)
 
@@ -102,20 +104,27 @@ def check_required_outputs(run_dir: Path, required_files: list[str]) -> dict[str
 def build_initial_manifest(run_dir: Path, config: dict, config_path: str | Path, mode: str) -> dict:
     run_dir = Path(run_dir)
     run_id = run_dir.name
-    experiment_name = config.get("experiment", {}).get("name") or config.get("project", {}).get("name", "synthetic_full")
+    experiment_cfg = config.get("experiment", {})
+    experiment_name = experiment_cfg.get("name") or config.get("project", {}).get("name", "synthetic_full")
+    data_seed = int(experiment_cfg.get("data_seed", experiment_cfg.get("seed", config.get("seed", 42))))
+    train_seed = int(experiment_cfg.get("train_seed", experiment_cfg.get("seed", config.get("seed", 42))))
     return {
         "run_id": run_id,
         "experiment_name": experiment_name,
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "command": " ".join(sys.argv),
         "config_path": str(config_path),
+        "resolved_config_path": str(run_dir / "config" / "resolved_config.yaml"),
         "run_dir": str(run_dir),
-        "seed": int(config.get("seed", config.get("experiment", {}).get("seed", 42))),
+        "seed": data_seed,
+        "data_seed": data_seed,
+        "train_seed": train_seed,
         "mode": mode,
         "status": "running",
         "dataset_dir": str(run_dir / "dataset"),
         "checkpoint_dir": str(run_dir / "checkpoints"),
         "result_dir": str(run_dir / "results"),
+        "audit_dir": str(run_dir / "audit"),
         "log_dir": str(run_dir / "logs"),
         "models": ["lstm", "transformer", "sparta"],
         "completed_stages": [],

@@ -3,10 +3,16 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+import random
 import sys
 from pathlib import Path
 
 import numpy as np
+
+try:
+    import torch
+except Exception:  # pragma: no cover - torch is optional for this generator
+    torch = None
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -15,7 +21,6 @@ if str(ROOT) not in sys.path:
 from src.simulation.export_logs import export_logs
 from src.simulation.synthetic_scenarios import SCENARIOS, scenario_state
 from src.utils.config import load_config, resolve_path
-from src.utils.seed import set_seed
 
 
 SERVICE_TYPES = ["latency", "reliability", "cost"]
@@ -46,6 +51,18 @@ class SyntheticEpisode:
 
 def _link_id(src: str, dst: str) -> str:
     return f"{src}-{dst}"
+
+
+def _data_seed(config: dict) -> int:
+    experiment_cfg = config.get("experiment", {})
+    return int(experiment_cfg.get("data_seed", experiment_cfg.get("seed", config.get("seed", 42))))
+
+
+def seed_data_generation(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    if torch is not None:
+        torch.manual_seed(seed)
 
 
 def _node_type(node_id: str) -> str:
@@ -777,7 +794,8 @@ def _generate_once(config: dict, seed: int, severity_scale: float) -> tuple[dict
 
 
 def generate_synthetic_full_logs(config: dict) -> dict[str, list[dict]]:
-    base_seed = int(config.get("seed", 42))
+    base_seed = _data_seed(config)
+    seed_data_generation(base_seed)
     retry_cfg = config.get("simulation", {}).get("generation_retry", {})
     max_retries = int(retry_cfg.get("max_retries", 20)) if bool(retry_cfg.get("enabled", True)) else 1
     last_reason = ""
@@ -798,7 +816,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    set_seed(int(config.get("seed", 42)))
+    seed_data_generation(_data_seed(config))
     logs = generate_synthetic_full_logs(config)
     raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
     export_logs(raw_dir, logs)

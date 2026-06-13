@@ -1,2 +1,2 @@
-method,accuracy,macro_f1,risk_recall,violation_recall,auc,node_attr_acc,link_attr_acc,metric_attr_acc,inference_time_ms
-transformer,0.8461538461538461,0.8396712091715335,0.8333333333333334,0.7297297297297297,nan,nan,nan,nan,0.49896410262932533
+method,has_attribution_head,accuracy,macro_f1,risk_recall,violation_recall,auc,node_attr_acc,link_attr_acc,metric_attr_acc,inference_time_ms
+transformer,false,0.8461538461538461,0.8396712091715335,0.8333333333333334,0.7297297297297297,nan,N/A,N/A,N/A,0.4739042734189962

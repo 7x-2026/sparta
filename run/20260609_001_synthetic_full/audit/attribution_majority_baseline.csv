@@ -1,5 +1,0 @@
-split,valid_attr_samples,node_majority_value,node_majority_acc,node_majority_count,link_majority_value,link_majority_acc,link_majority_count,metric_majority_value,metric_majority_name,metric_majority_acc,metric_majority_count
-train,254,1,0.35826771653543305,91,1,0.33858267716535434,86,3,queue,0.2559055118110236,65
-val,80,2,0.3875,31,0,0.3625,29,1,loss,0.325,26
-test,85,1,0.47058823529411764,40,0,0.32941176470588235,28,3,queue,0.36470588235294116,31
-all,419,1,0.38424821002386633,161,1,0.27684964200477324,116,1,loss,0.26252983293556087,110

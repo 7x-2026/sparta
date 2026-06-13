@@ -9,7 +9,8 @@ seed: 42
 
 experiment:
   name: synthetic_full
-  seed: 42
+  data_seed: 42
+  train_seed: 0
 
 run:
   output_root: run

@@ -1,7 +1,0 @@
-synthetic full attempt 1/20: episodes=403, seed=42, severity_scale=1.000; validation=train normal ratio 0.345 outside [0.350, 0.550]
-synthetic full attempt 2/20: episodes=383, seed=43, severity_scale=0.965; validation=ok
-Wrote 8000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\node_log.csv
-Wrote 12000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\link_log.csv
-Wrote 80000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\service_log.csv
-Wrote 80000 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\path_log.csv
-Wrote 80 rows to F:\7x\SPARTA\run\20260609_005_synthetic_full\raw_logs\sla_log.csv

@@ -1,2 +1,0 @@
-lstm epoch 1: train_loss=0.6843 val_macro_f1=0.7050
-Training complete for lstm

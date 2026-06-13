@@ -1,2 +1,0 @@
-model,run_id,dataset_path,checkpoint_save_path,epoch,train_loss,val_loss,val_accuracy,val_macro_f1,val_risk_recall,val_violation_recall,val_node_attr_acc,val_link_attr_acc,val_metric_attr_acc,best_epoch,best_checkpoint_path
-lstm,20260609_005_synthetic_full,F:\7x\SPARTA\run\20260609_005_synthetic_full\dataset\train.pkl,F:\7x\SPARTA\run\20260609_005_synthetic_full\checkpoints,1,0.6843202941543688,0.652454409763398,0.7209390862944163,0.7050099083609354,0.6061569016881827,0.6623889437314906,nan,nan,nan,1,F:\7x\SPARTA\run\20260609_005_synthetic_full\checkpoints\lstm_best.pth

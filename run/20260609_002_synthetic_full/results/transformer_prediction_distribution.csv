@@ -1,4 +1,0 @@
-pred_label,pred_name,count,ratio
-0,normal,92,0.5476190476190477
-1,risky,76,0.4523809523809524
-2,violated,0,0.0

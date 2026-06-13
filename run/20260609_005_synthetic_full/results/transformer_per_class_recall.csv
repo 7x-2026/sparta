@@ -1,4 +1,0 @@
-class_id,class_name,recall,support
-0,normal,0.7521595727972358,6367
-1,risky,0.5717879256965944,5168
-2,violated,0.8513609467455622,4225

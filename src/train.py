@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -18,7 +20,6 @@ from src.models.sparta import SPARTA
 from src.models.transformer import TransformerBaseline
 from src.trainer import fit
 from src.utils.config import load_config, resolve_path
-from src.utils.seed import set_seed
 
 
 SUPPORTED_MODELS = {"lstm", "transformer", "sparta"}
@@ -40,6 +41,21 @@ def build_model(config: dict, model_name: str):
     if model_name == "sparta":
         return SPARTA(config)
     raise ValueError(f"Unsupported model: {model_name}")
+
+
+def get_train_seed(config: dict) -> int:
+    experiment_cfg = config.get("experiment", {})
+    return int(experiment_cfg.get("train_seed", experiment_cfg.get("seed", config.get("seed", 42))))
+
+
+def set_train_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def build_dataloaders(config: dict) -> tuple[DataLoader, DataLoader]:
@@ -75,7 +91,7 @@ def select_device(config: dict) -> torch.device:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
-    set_seed(int(config.get("seed", 42)))
+    set_train_seed(get_train_seed(config))
     device = select_device(config)
     train_loader, val_loader = build_dataloaders(config)
     model = build_model(config, args.model).to(device)

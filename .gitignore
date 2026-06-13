@@ -5,3 +5,14 @@ data/
 *.npy
 *.npz
 run/
+run_groups/
+results/
+checkpoints/
+logs/
+__pycache__/
+*.py[cod]
+*.pyc
+*.pth
+*.pt
+*.log
+.pytest_cache/
