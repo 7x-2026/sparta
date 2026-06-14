@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import importlib
+import os
 import random
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ from src.simulation.log_schema import LOG_SCHEMA_VERSION
 from src.simulation.synthetic_scenarios import SCENARIOS
 from src.simulation.synthetic_full_generator import generate_synthetic_full_logs
 from src.utils.config import load_config, resolve_path
+from src.utils.run_manager import effective_simulator_backend
 
 
 def try_import_edgesimpy() -> tuple[bool, object | None, str | None]:
@@ -81,6 +83,9 @@ def _service_sla(logs: dict[str, list[dict]]) -> dict[int, dict]:
     return {_int_value(row.get("service_id")): row for row in logs.get("sla_log.csv", [])}
 
 
+RISK_INJECTION_NAME = "adapter_cpu_overload_balancer_v1"
+
+
 def _cpu_target_cells(config: dict, split_times: dict[str, list[int]], rng: np.random.Generator) -> dict[str, list[tuple[int, int]]]:
     data_cfg = config["data"]
     num_services = int(data_cfg["num_services"])
@@ -112,11 +117,11 @@ def _cpu_target_cells(config: dict, split_times: dict[str, list[int]], rng: np.r
 
 
 def inject_cpu_dominant_overload(logs: dict[str, list[dict]], config: dict) -> None:
-    """Add EdgeSimPy-stub-specific CPU-dominant overload windows.
+    """Add EdgeSimPy-adapter CPU-dominant overload windows.
 
     The synthetic generator often makes node overload and queue growth rise
-    together. For the EdgeSimPy stub we keep the same five-scenario surface but
-    carve out evenly interleaved windows where CPU is the dominant risk signal.
+    together. The adapter keeps the same five-scenario surface but carves out
+    evenly interleaved windows where CPU is the dominant risk signal.
     """
     data_cfg = config["data"]
     H = int(data_cfg["pred_horizon"])
@@ -262,24 +267,95 @@ def _adapter_generation_config(config: dict) -> dict:
 def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
     edge_cfg = config.get("edgesimpy", {})
     backend = str(edge_cfg.get("backend", "edgesimpy_stub"))
+    allow_adapter_fallback = bool(edge_cfg.get("allow_adapter_fallback", False))
     installed, module, import_error = try_import_edgesimpy()
     if backend not in {"edgesimpy_stub", "edgesimpy"}:
         raise ValueError(f"Unsupported EdgeSimPy backend: {backend}")
+
+    print(
+        f"[EDGESIMPY] requested_backend={backend} allow_adapter_fallback={allow_adapter_fallback}",
+        flush=True,
+    )
+    print(
+        f"[EDGESIMPY] import_success={installed} import_error={import_error if import_error else ''}",
+        flush=True,
+    )
+
+    adapter_fallback = False
+    fallback_reason: str | None = None
+    real_edgesimpy_objects_created = False
+    object_counts = {
+        "simulator": 0,
+        "edge_server": 0,
+        "service": 0,
+        "user": 0,
+        "application": 0,
+    }
     if backend == "edgesimpy" and not installed:
-        raise RuntimeError(
-            "[EdgeSimPy Adapter Failed]\n"
-            "backend=edgesimpy was requested, but EdgeSimPy is not installed or not importable.\n"
-            "Please run:\n"
-            "pip install -r requirements-edgesimpy.txt"
+        if not allow_adapter_fallback:
+            raise RuntimeError(
+                "[EdgeSimPy Adapter Failed]\n"
+                "backend=edgesimpy was requested, but EdgeSimPy is not installed or not importable.\n"
+                "Please run:\n"
+                "pip install -r requirements-edgesimpy.txt"
+            )
+        adapter_fallback = True
+        fallback_reason = f"edge_sim_py import failed: {import_error}"
+        print(
+            "[EDGESIMPY] backend=edgesimpy import failed; "
+            "using adapter fallback raw-log generator. import_error="
+            f"{import_error}",
+            flush=True,
+        )
+    elif backend == "edgesimpy":
+        # Importability alone is not proof that this run used a real EdgeSimPy
+        # simulation. The current MVP adapter exports the SPARTA raw-log schema
+        # through the synthetic-full generator and risk balancer, so strict real
+        # backend requests must fail until verified EdgeSimPy objects are created.
+        fallback_reason = (
+            "edge_sim_py imports, but this adapter did not create verified real "
+            "EdgeSimPy Simulator/EdgeServer/Service/User/Application objects"
+        )
+        if not allow_adapter_fallback:
+            raise RuntimeError(
+                "[EdgeSimPy Adapter Failed]\n"
+                "backend=edgesimpy was requested with allow_adapter_fallback=false, "
+                "but verified real EdgeSimPy objects were not created by the adapter."
+            )
+        adapter_fallback = True
+        print(
+            "[EDGESIMPY] edge_sim_py import succeeded, but verified real objects "
+            "were not created; using adapter fallback raw-log generator.",
+            flush=True,
         )
 
     generation_config = _adapter_generation_config(config)
     seed_adapter(_data_seed(generation_config))
     logs = generate_synthetic_full_logs(generation_config)
-    if backend == "edgesimpy_stub":
-        inject_cpu_dominant_overload(logs, generation_config)
+    inject_cpu_dominant_overload(logs, generation_config)
     output_dir = Path(output_dir)
     export_logs(output_dir, logs)
+    raw_log_files = {
+        "node_log.csv": str(output_dir / "node_log.csv"),
+        "link_log.csv": str(output_dir / "link_log.csv"),
+        "service_log.csv": str(output_dir / "service_log.csv"),
+        "path_log.csv": str(output_dir / "path_log.csv"),
+        "sla_log.csv": str(output_dir / "sla_log.csv"),
+    }
+    print(
+        "[EDGESIMPY] fallback_used="
+        f"{adapter_fallback} real_edgesimpy_objects_created={real_edgesimpy_objects_created} "
+        f"object_counts={object_counts}",
+        flush=True,
+    )
+    print(f"[EDGESIMPY] raw_logs_saved={output_dir}", flush=True)
+
+    effective_backend = effective_simulator_backend(
+        "edgesimpy",
+        backend,
+        adapter_fallback,
+        real_edgesimpy_objects_created,
+    )
 
     return {
         "node_log": str(output_dir / "node_log.csv"),
@@ -288,12 +364,29 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
         "path_log": str(output_dir / "path_log.csv"),
         "sla_log": str(output_dir / "sla_log.csv"),
         "data_source": "edgesimpy",
+        "requested_backend": backend,
         "simulator_backend": backend,
+        "effective_simulator_backend": effective_backend,
+        "effective_simulator_backend_at_generation": effective_backend,
         "raw_log_schema_version": LOG_SCHEMA_VERSION,
         "edgesimpy_installed": bool(installed),
+        "edgesimpy_installed_at_generation": bool(installed),
         "edgesimpy_import_error": None if installed else import_error,
+        "edgesimpy_import_error_at_generation": None if installed else import_error,
         "edgesimpy_config": edge_cfg,
         "edgesimpy_module": getattr(module, "__file__", None) if module is not None else None,
+        "edgesimpy_adapter_fallback": adapter_fallback,
+        "edgesimpy_adapter_fallback_at_generation": adapter_fallback,
+        "fallback_reason": fallback_reason,
+        "real_edgesimpy_objects_created": real_edgesimpy_objects_created,
+        "edgesimpy_object_counts": object_counts,
+        "adapter_entry_function": "src.simulation.edgesimpy_adapter.run_edgesimpy_adapter",
+        "raw_log_generator_function": "src.simulation.synthetic_full_generator.generate_synthetic_full_logs",
+        "raw_log_files": raw_log_files,
+        "python_executable": sys.executable,
+        "python_version": sys.version,
+        "conda_env": os.environ.get("CONDA_DEFAULT_ENV"),
+        "risk_injection": RISK_INJECTION_NAME,
     }
 
 
@@ -306,7 +399,10 @@ def main() -> None:
     config = load_config(args.config)
     output_dir = Path(args.output_dir) if args.output_dir else resolve_path(config, config["data"]["raw_logs_dir"])
     metadata = run_edgesimpy_adapter(config, output_dir)
-    print(f"[edgesimpy_adapter] backend={metadata['simulator_backend']} raw_dir={output_dir}")
+    print(
+        f"[edgesimpy_adapter] backend={metadata['simulator_backend']} "
+        f"effective_backend={metadata['effective_simulator_backend']} raw_dir={output_dir}"
+    )
 
 
 if __name__ == "__main__":

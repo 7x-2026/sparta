@@ -18,9 +18,12 @@ from src.utils.run_manager import (
     build_initial_manifest,
     copy_config_to_run,
     create_run_dir,
+    effective_simulator_backend,
     init_run_structure,
     load_run_manifest,
     save_run_manifest,
+    save_raw_log_generation_provenance,
+    timestamp_now,
     update_run_manifest,
 )
 
@@ -174,12 +177,36 @@ def persist_run_config_and_manifest(run_dir: Path, config_path: str | Path, conf
     existing = load_run_manifest(run_dir)
     if existing and not new_run:
         completed = existing.get("completed_stages", [])
+        prior_effective_at_generation = existing.get("effective_simulator_backend_at_generation")
+        prior_manifest_effective = existing.get("effective_simulator_backend")
+        prior_provenance_inconsistent = bool(existing.get("provenance_inconsistent", False))
+        provenance_inconsistent = prior_provenance_inconsistent or bool(
+            prior_effective_at_generation
+            and prior_manifest_effective
+            and prior_manifest_effective != prior_effective_at_generation
+        )
         manifest.update(existing)
+        adapter_fallback = bool(
+            existing.get(
+                "edgesimpy_adapter_fallback_at_generation",
+                existing.get("edgesimpy_adapter_fallback", False),
+            )
+        )
+        effective_backend = prior_effective_at_generation or effective_simulator_backend(
+            data_source(config),
+            simulator_backend(config),
+            adapter_fallback,
+            bool(existing.get("real_edgesimpy_objects_created", False)),
+        )
+        now = timestamp_now()
         manifest.update(
             {
                 "mode": mode,
+                "last_mode": mode,
                 "status": "running",
                 "command": " ".join(sys.argv),
+                "last_command": " ".join(sys.argv),
+                "last_updated_at": now,
                 "experiment_name": config.get("experiment", {}).get("name", manifest["experiment_name"]),
                 "data_seed": data_seed(config),
                 "train_seed": train_seed(config),
@@ -192,8 +219,10 @@ def persist_run_config_and_manifest(run_dir: Path, config_path: str | Path, conf
                 "audit_dir": str(run_dir / "audit"),
                 "data_source": data_source(config),
                 "simulator_backend": simulator_backend(config),
+                "effective_simulator_backend": effective_backend,
                 "raw_log_schema_version": "v1",
                 "edgesimpy_config": config.get("edgesimpy", {}),
+                "provenance_inconsistent": provenance_inconsistent,
                 "completed_stages": completed,
                 "error": None,
             }
@@ -247,11 +276,86 @@ def mark_stage(run_dir: Path, stage: str) -> None:
 
 
 def finish_manifest(run_dir: Path, status: str = "completed", missing_outputs: list[str] | None = None) -> None:
-    update_run_manifest(run_dir, {"status": status, "missing_outputs": missing_outputs or [], "error": None})
+    update_run_manifest(
+        run_dir,
+        {"status": status, "missing_outputs": missing_outputs or [], "error": None, "last_updated_at": timestamp_now()},
+    )
 
 
 def fail_manifest(run_dir: Path, exc: BaseException) -> None:
-    update_run_manifest(run_dir, {"status": "failed", "error": str(exc)})
+    update_run_manifest(run_dir, {"status": "failed", "error": str(exc), "last_updated_at": timestamp_now()})
+
+
+def record_raw_log_generation_provenance(run_dir: Path, metadata: dict) -> None:
+    manifest = load_run_manifest(run_dir)
+    generation_created_at = timestamp_now()
+    generation_mode = manifest.get("last_mode", manifest.get("mode"))
+    effective_backend = metadata.get("effective_simulator_backend_at_generation") or metadata.get("effective_simulator_backend")
+    if not effective_backend:
+        effective_backend = effective_simulator_backend(
+            str(metadata.get("data_source", "synthetic_full")),
+            str(metadata.get("simulator_backend", metadata.get("requested_backend", "synthetic_full"))),
+            bool(metadata.get("edgesimpy_adapter_fallback_at_generation", metadata.get("edgesimpy_adapter_fallback", False))),
+            bool(metadata.get("real_edgesimpy_objects_created", False)),
+        )
+    fallback_at_generation = bool(
+        metadata.get("edgesimpy_adapter_fallback_at_generation", metadata.get("edgesimpy_adapter_fallback", False))
+    )
+    raw_log_files = metadata.get("raw_log_files")
+    if raw_log_files is None:
+        raw_log_files = {
+            name: str(Path(metadata[name]).resolve())
+            for name in ["node_log", "link_log", "service_log", "path_log", "sla_log"]
+            if name in metadata
+        }
+    provenance = {
+        "provenance_version": 1,
+        "run_id": run_dir.name,
+        "generation_command": " ".join(sys.argv),
+        "generation_mode": generation_mode,
+        "generation_created_at": generation_created_at,
+        "data_source": metadata.get("data_source"),
+        "requested_backend": metadata.get("requested_backend", metadata.get("simulator_backend")),
+        "simulator_backend": metadata.get("simulator_backend"),
+        "effective_simulator_backend_at_generation": effective_backend,
+        "edgesimpy_adapter_fallback_at_generation": fallback_at_generation,
+        "fallback_reason": metadata.get("fallback_reason"),
+        "edgesimpy_installed_at_generation": metadata.get("edgesimpy_installed_at_generation", metadata.get("edgesimpy_installed")),
+        "edgesimpy_import_error_at_generation": metadata.get(
+            "edgesimpy_import_error_at_generation",
+            metadata.get("edgesimpy_import_error"),
+        ),
+        "edgesimpy_module": metadata.get("edgesimpy_module"),
+        "real_edgesimpy_objects_created": bool(metadata.get("real_edgesimpy_objects_created", False)),
+        "edgesimpy_object_counts": metadata.get("edgesimpy_object_counts", {}),
+        "adapter_entry_function": metadata.get("adapter_entry_function"),
+        "raw_log_generator_function": metadata.get("raw_log_generator_function"),
+        "raw_log_schema_version": metadata.get("raw_log_schema_version", "v1"),
+        "risk_injection": metadata.get("risk_injection", "none"),
+        "raw_log_files": raw_log_files,
+        "python_executable": metadata.get("python_executable"),
+        "python_version": metadata.get("python_version"),
+        "conda_env": metadata.get("conda_env"),
+    }
+    provenance_path = save_raw_log_generation_provenance(run_dir, provenance, overwrite=False)
+    update_run_manifest(
+        run_dir,
+        {
+            **metadata,
+            "effective_simulator_backend": effective_backend,
+            "edgesimpy_adapter_fallback": fallback_at_generation,
+            "generation_command": provenance["generation_command"],
+            "generation_mode": generation_mode,
+            "generation_created_at": generation_created_at,
+            "effective_simulator_backend_at_generation": effective_backend,
+            "edgesimpy_adapter_fallback_at_generation": fallback_at_generation,
+            "edgesimpy_installed_at_generation": provenance["edgesimpy_installed_at_generation"],
+            "edgesimpy_import_error_at_generation": provenance["edgesimpy_import_error_at_generation"],
+            "raw_log_generation_provenance": str(provenance_path),
+            "provenance_inconsistent": False,
+            "last_updated_at": generation_created_at,
+        },
+    )
 
 
 def verify_attribution(config_path: str | Path) -> None:
@@ -326,15 +430,31 @@ def run_raw_log_generation(run_dir: Path, config_path: Path, config: dict) -> No
     source = data_source(config)
     if source == "synthetic_full":
         run_step("[1/6] Generating raw logs...", [sys.executable, "src/simulation/synthetic_full_generator.py", "--config", str(config_path)])
-        update_run_manifest(
+        raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
+        record_raw_log_generation_provenance(
             run_dir,
             {
+                "node_log": str(raw_dir / "node_log.csv"),
+                "link_log": str(raw_dir / "link_log.csv"),
+                "service_log": str(raw_dir / "service_log.csv"),
+                "path_log": str(raw_dir / "path_log.csv"),
+                "sla_log": str(raw_dir / "sla_log.csv"),
                 "data_source": "synthetic_full",
+                "requested_backend": "synthetic_full",
                 "simulator_backend": "synthetic_full",
+                "effective_simulator_backend": "synthetic_full",
+                "effective_simulator_backend_at_generation": "synthetic_full",
                 "raw_log_schema_version": "v1",
                 "edgesimpy_installed": None,
                 "edgesimpy_import_error": None,
                 "edgesimpy_config": {},
+                "edgesimpy_adapter_fallback": False,
+                "edgesimpy_adapter_fallback_at_generation": False,
+                "real_edgesimpy_objects_created": False,
+                "edgesimpy_object_counts": {},
+                "raw_log_generator_function": "src.simulation.synthetic_full_generator.generate_synthetic_full_logs",
+                "python_executable": sys.executable,
+                "python_version": sys.version,
             },
         )
         return
@@ -344,7 +464,7 @@ def run_raw_log_generation(run_dir: Path, config_path: Path, config: dict) -> No
 
         raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
         metadata = run_edgesimpy_adapter(config, raw_dir)
-        update_run_manifest(run_dir, metadata)
+        record_raw_log_generation_provenance(run_dir, metadata)
         return
     raise ValueError(f"Unsupported data.source: {source}")
 

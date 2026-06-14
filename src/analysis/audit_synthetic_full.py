@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from collections import Counter, defaultdict
@@ -325,6 +326,14 @@ def report_passed(shift_rows: list[dict]) -> bool:
     return all(row["status"] == "pass" for row in shift_rows)
 
 
+def load_run_manifest_for_report(output_path: Path) -> dict:
+    manifest_path = output_path.parent.parent / "run_manifest.json"
+    if not manifest_path.exists():
+        return {}
+    with manifest_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def write_report(output_path: Path, label_rows: list[dict], scenario_rows: list[dict], majority_rows: list[dict], shift_rows: list[dict]) -> None:
     label_ratios = split_label_ratios(label_rows)
     scenario_ratios = split_scenario_ratios(scenario_rows)
@@ -383,6 +392,73 @@ def write_report(output_path: Path, label_rows: list[dict], scenario_rows: list[
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_report_v2(output_path: Path, label_rows: list[dict], scenario_rows: list[dict], majority_rows: list[dict], shift_rows: list[dict]) -> None:
+    label_ratios = split_label_ratios(label_rows)
+    scenario_ratios = split_scenario_ratios(scenario_rows)
+    passed = report_passed(shift_rows)
+    failed = [row for row in shift_rows if row["status"] == "fail"]
+    metric_only_failures = bool(failed) and all(str(row["check"]).startswith("metric_coverage") for row in failed)
+    all_majority = next(row for row in majority_rows if row["split"] == "all")
+    manifest = load_run_manifest_for_report(output_path)
+    effective_backend = manifest.get("effective_simulator_backend", "unknown")
+    effective_backend_at_generation = manifest.get("effective_simulator_backend_at_generation", effective_backend)
+    provenance_path = manifest.get("raw_log_generation_provenance", "")
+
+    lines = [
+        "SPARTA synthetic full 数据审计报告",
+        "",
+        f"effective_simulator_backend: {effective_backend}",
+        f"effective_simulator_backend_at_generation: {effective_backend_at_generation}",
+        f"raw_log_generation_provenance: {provenance_path}",
+        "",
+        f"结论：{'通过正式实验数据要求' if passed else '未通过正式实验数据要求'}。",
+        "",
+        "标签分布：",
+    ]
+    for split in SPLITS:
+        ratios = label_ratios[split]
+        lines.append(
+            f"- {split}: normal={ratios.get('normal', 0.0):.2%}, "
+            f"risky={ratios.get('risky', 0.0):.2%}, violated={ratios.get('violated', 0.0):.2%}"
+        )
+
+    lines.extend(["", "场景分布："])
+    for split in SPLITS:
+        parts = [f"{scenario}={scenario_ratios[split].get(scenario, 0.0):.2%}" for scenario in SCENARIOS]
+        lines.append(f"- {split}: " + ", ".join(parts))
+
+    lines.extend(
+        [
+            "",
+            "归因 majority baseline：",
+            f"- node_majority_acc={float(all_majority['node_majority_acc']):.2%}, "
+            f"link_majority_acc={float(all_majority['link_majority_acc']):.2%}, "
+            f"metric_majority_acc={float(all_majority['metric_majority_acc']):.2%}",
+            "",
+            "失败项：" if failed else "未发现失败项：",
+        ]
+    )
+    if failed:
+        lines.extend(f"- {row['check']}: {row['detail']}" for row in failed)
+    else:
+        lines.append("- 所有核心审计规则均通过。")
+
+    lines.extend(["", "中文总结："])
+    if passed:
+        lines.append("当前数据在标签分布、场景覆盖、归因分布和 split shift 上满足正式实验数据的最低要求。")
+    elif metric_only_failures:
+        lines.append(
+            "标签分布和场景分布基本合格，当前失败主要来自 risk_metric 某类覆盖不足。"
+            "优先修复数据生成器或 adapter 的风险指标归因覆盖，不应将该问题泛化为标签漂移或场景块偏置。"
+        )
+    else:
+        lines.append(
+            "当前数据暂不建议作为正式实验数据直接使用。优先修复 split 间标签比例漂移、场景块偏置或归因类别过度集中问题，"
+            "否则模型可能学到场景标签或固定瓶颈编号，而不是 SLA 风险随时间演化的规律。"
+        )
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
     dataset_dir = Path(args.dataset_dir)
@@ -404,7 +480,7 @@ def main() -> None:
     write_csv_rows(output_dir / "attribution_distribution.csv", attr_rows)
     write_csv_rows(output_dir / "attribution_majority_baseline.csv", majority_rows)
     write_csv_rows(output_dir / "split_shift_report.csv", shift_rows)
-    write_report(output_dir / "audit_report.txt", label_rows, scenario_rows, majority_rows, shift_rows)
+    write_report_v2(output_dir / "audit_report.txt", label_rows, scenario_rows, majority_rows, shift_rows)
     print(f"Wrote enhanced synthetic full audit outputs to {output_dir}")
 
 
