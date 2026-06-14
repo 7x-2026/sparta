@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import csv
 from pathlib import Path
 
 import yaml
@@ -41,3 +42,13 @@ def test_edgesimpy_stub_generate_only_pipeline(tmp_path):
     assert manifest["simulator_backend"] == "edgesimpy_stub"
     assert manifest["raw_log_schema_version"] == "v1"
     assert "check_raw_log_schema" in manifest["completed_stages"]
+
+    with (run_dir / "audit" / "attribution_distribution.csv").open("r", newline="", encoding="utf-8") as f:
+        attr_rows = list(csv.DictReader(f))
+    cpu_rows = [
+        row
+        for row in attr_rows
+        if row["field"] == "risk_metric" and row["value_name"] == "cpu" and row["split"] in {"train", "val", "test"}
+    ]
+    assert {row["split"] for row in cpu_rows} == {"train", "val", "test"}
+    assert all(float(row["ratio"]) > 0.0 for row in cpu_rows)

@@ -163,7 +163,8 @@ def assign_attribution(sample: dict, logs: dict, config: dict) -> tuple[int, int
             if node in node_scores:
                 node_scores[node] = max(node_scores[node], score)
             if row:
-                metric_scores[2] = max(metric_scores[2], min(_f(row, "cpu_util") / 0.85, metric_cap))
+                cpu_pressure = max(_f(row, "cpu_util"), 1.0 - _f(row, "available_cpu", 1.0))
+                metric_scores[2] = max(metric_scores[2], min(cpu_pressure / 0.85, metric_cap))
                 path_max_queue = max(path_max_queue, _f(row, "queue_len"))
         queue_values.append(path_max_queue)
         if prev_queue is not None:
