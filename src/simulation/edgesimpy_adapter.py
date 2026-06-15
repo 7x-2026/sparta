@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import copy
 import importlib
+import inspect
 import os
+import pkgutil
 import random
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +36,188 @@ def try_import_edgesimpy() -> tuple[bool, object | None, str | None]:
         return True, module, None
     except Exception as exc:
         return False, None, str(exc)
+
+
+def find_edgesimpy_class(module: object, class_name: str) -> type | None:
+    candidate = getattr(module, class_name, None)
+    if inspect.isclass(candidate):
+        return candidate
+    package_path = getattr(module, "__path__", None)
+    package_name = getattr(module, "__name__", "edge_sim_py")
+    if not package_path:
+        return None
+    for info in pkgutil.walk_packages(package_path, f"{package_name}."):
+        try:
+            submodule = importlib.import_module(info.name)
+        except Exception:
+            continue
+        candidate = getattr(submodule, class_name, None)
+        if inspect.isclass(candidate):
+            return candidate
+    return None
+
+
+def _instantiate_with_supported_kwargs(cls: type, candidate_kwargs: dict) -> object:
+    signature = inspect.signature(cls)
+    supported = {
+        name: value
+        for name, value in candidate_kwargs.items()
+        if name in signature.parameters and name != "self"
+    }
+    return cls(**supported)
+
+
+def _reset_edgesimpy_instances(module: object) -> None:
+    component_manager = getattr(module, "ComponentManager", None)
+    classes: set[type] = set()
+    if inspect.isclass(component_manager):
+        pending = list(component_manager.__subclasses__())
+        while pending:
+            cls = pending.pop()
+            classes.add(cls)
+            pending.extend(cls.__subclasses__())
+    simulator_cls = getattr(module, "Simulator", None)
+    if inspect.isclass(simulator_cls):
+        classes.add(simulator_cls)
+    for cls in classes:
+        if hasattr(cls, "_instances"):
+            cls._instances = []
+        if hasattr(cls, "_object_count"):
+            cls._object_count = 0
+
+
+def _count_edgesimpy_objects(module: object) -> dict[str, int]:
+    names = {
+        "Simulator": "simulator",
+        "EdgeServer": "edge_server",
+        "Service": "service",
+        "User": "user",
+        "Application": "application",
+    }
+    counts: dict[str, int] = {}
+    for class_name, key in names.items():
+        cls = find_edgesimpy_class(module, class_name)
+        instances = getattr(cls, "_instances", []) if cls is not None else []
+        counts[key] = len(instances)
+    return counts
+
+
+def run_edgesimpy_real_smoke(config: dict) -> dict:
+    """Try a minimal real EdgeSimPy object creation and one simulation step."""
+    installed, module, import_error = try_import_edgesimpy()
+    metadata = {
+        "import_success": bool(installed),
+        "edgesimpy_module": getattr(module, "__file__", None) if module is not None else None,
+        "real_object_created": False,
+        "real_simulation_ran": False,
+        "created_object_types": [],
+        "edgesimpy_object_counts": {
+            "simulator": 0,
+            "edge_server": 0,
+            "service": 0,
+            "user": 0,
+            "application": 0,
+        },
+        "error": None if installed else import_error,
+    }
+    if not installed or module is None:
+        return metadata
+
+    try:
+        _reset_edgesimpy_instances(module)
+        classes = {
+            name: find_edgesimpy_class(module, name)
+            for name in ["Simulator", "EdgeServer", "Service", "User", "Application"]
+        }
+        missing = [name for name, cls in classes.items() if cls is None]
+        if missing:
+            metadata["error"] = f"Missing EdgeSimPy classes: {missing}"
+            return metadata
+
+        def noop_algorithm(parameters: dict) -> None:
+            return None
+
+        logs_dir = Path(tempfile.gettempdir()) / "sparta_edgesimpy_smoke_logs"
+        simulator = _instantiate_with_supported_kwargs(
+            classes["Simulator"],
+            {
+                "tick_duration": 1,
+                "tick_unit": "seconds",
+                "resource_management_algorithm": noop_algorithm,
+                "stopping_criterion": lambda model: model.schedule.steps >= 1,
+                "dump_interval": float("inf"),
+                "logs_directory": str(logs_dir),
+            },
+        )
+        created = ["Simulator"]
+
+        edge_server = _instantiate_with_supported_kwargs(
+            classes["EdgeServer"],
+            {
+                "obj_id": 1,
+                "coordinates": (0, 0),
+                "model_name": "sparta-smoke-edge",
+                "cpu": 100,
+                "memory": 128,
+                "disk": 1024,
+            },
+        )
+        service = _instantiate_with_supported_kwargs(
+            classes["Service"],
+            {
+                "obj_id": 1,
+                "image_digest": "sparta-smoke-image",
+                "label": "sparta-smoke-service",
+                "cpu_demand": 10,
+                "memory_demand": 16,
+                "state": 0,
+            },
+        )
+        application = _instantiate_with_supported_kwargs(
+            classes["Application"],
+            {"obj_id": 1, "label": "sparta-smoke-application"},
+        )
+        user = _instantiate_with_supported_kwargs(classes["User"], {"obj_id": 1})
+
+        application.connect_to_service(service)
+        application.users.append(user)
+        user.applications = []
+        user.coordinates = (0, 0)
+        user.coordinates_trace = [(0, 0), (0, 0)]
+        user.mobility_model = lambda current_user: current_user.coordinates_trace.append(current_user.coordinates)
+
+        for obj, name in [
+            (edge_server, "EdgeServer"),
+            (service, "Service"),
+            (application, "Application"),
+            (user, "User"),
+        ]:
+            simulator.initialize_agent(agent=obj)
+            created.append(name)
+
+        before_steps = int(simulator.schedule.steps)
+        simulator.step()
+        after_steps = int(simulator.schedule.steps)
+
+        metadata["created_object_types"] = created
+        metadata["edgesimpy_object_counts"] = _count_edgesimpy_objects(module)
+        metadata["real_object_created"] = all(metadata["edgesimpy_object_counts"].get(key, 0) > 0 for key in metadata["edgesimpy_object_counts"])
+        metadata["real_simulation_ran"] = after_steps > before_steps
+        if not metadata["real_simulation_ran"]:
+            metadata["error"] = "Simulator.step() did not advance the schedule"
+        return metadata
+    except Exception as exc:
+        metadata["created_object_types"] = metadata.get("created_object_types", [])
+        metadata["edgesimpy_object_counts"] = _count_edgesimpy_objects(module)
+        metadata["real_object_created"] = any(count > 0 for count in metadata["edgesimpy_object_counts"].values())
+        metadata["real_simulation_ran"] = False
+        metadata["error"] = str(exc)
+        return metadata
+    finally:
+        try:
+            _reset_edgesimpy_instances(module)
+        except Exception:
+            pass
 
 
 def _data_seed(config: dict) -> int:
@@ -205,6 +390,16 @@ def inject_cpu_dominant_overload(logs: dict[str, list[dict]], config: dict) -> N
                 node_position_cursor += 1
 
 
+def generate_real_backend_raw_logs(config: dict, smoke_metadata: dict) -> dict[str, list[dict]]:
+    """Build SPARTA raw logs after a verified real EdgeSimPy smoke run.
+
+    This MVP adapter uses the real EdgeSimPy smoke state as a backend
+    availability proof, then expands it through the existing SPARTA v0 raw-log
+    schema generator and lightweight risk perturbation layer.
+    """
+    return generate_synthetic_full_logs(config)
+
+
 def _adapter_generation_config(config: dict) -> dict:
     cfg = copy.deepcopy(config)
     data_cfg = cfg.setdefault("data", {})
@@ -283,7 +478,23 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
 
     adapter_fallback = False
     fallback_reason: str | None = None
-    real_edgesimpy_objects_created = False
+    smoke_metadata = {
+        "import_success": bool(installed),
+        "edgesimpy_module": getattr(module, "__file__", None) if module is not None else None,
+        "real_object_created": False,
+        "real_simulation_ran": False,
+        "created_object_types": [],
+        "edgesimpy_object_counts": {
+            "simulator": 0,
+            "edge_server": 0,
+            "service": 0,
+            "user": 0,
+            "application": 0,
+        },
+        "error": None if installed else import_error,
+    }
+    real_object_created = False
+    real_simulation_ran = False
     object_counts = {
         "simulator": 0,
         "edge_server": 0,
@@ -308,30 +519,60 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
             flush=True,
         )
     elif backend == "edgesimpy":
-        # Importability alone is not proof that this run used a real EdgeSimPy
-        # simulation. The current MVP adapter exports the SPARTA raw-log schema
-        # through the synthetic-full generator and risk balancer, so strict real
-        # backend requests must fail until verified EdgeSimPy objects are created.
-        fallback_reason = (
-            "edge_sim_py imports, but this adapter did not create verified real "
-            "EdgeSimPy Simulator/EdgeServer/Service/User/Application objects"
+        smoke_metadata = run_edgesimpy_real_smoke(config)
+        real_object_created = bool(smoke_metadata.get("real_object_created", False))
+        real_simulation_ran = bool(smoke_metadata.get("real_simulation_ran", False))
+        object_counts = dict(smoke_metadata.get("edgesimpy_object_counts", object_counts))
+        print(
+            "[EDGESIMPY] smoke_test "
+            f"real_object_created={real_object_created} "
+            f"real_simulation_ran={real_simulation_ran} "
+            f"created_object_types={smoke_metadata.get('created_object_types', [])} "
+            f"error={smoke_metadata.get('error')}",
+            flush=True,
         )
-        if not allow_adapter_fallback:
+        if not real_object_created or not real_simulation_ran:
+            fallback_reason = (
+                "real EdgeSimPy smoke test failed: "
+                f"{smoke_metadata.get('error') or 'objects or simulation step were not verified'}"
+            )
+        if (not real_object_created or not real_simulation_ran) and not allow_adapter_fallback:
             raise RuntimeError(
                 "[EdgeSimPy Adapter Failed]\n"
                 "backend=edgesimpy was requested with allow_adapter_fallback=false, "
-                "but verified real EdgeSimPy objects were not created by the adapter."
+                "but verified real EdgeSimPy objects were not created and run by the adapter.\n"
+                f"smoke_error={smoke_metadata.get('error')}"
             )
-        adapter_fallback = True
-        print(
-            "[EDGESIMPY] edge_sim_py import succeeded, but verified real objects "
-            "were not created; using adapter fallback raw-log generator.",
-            flush=True,
-        )
+        adapter_fallback = not (real_object_created and real_simulation_ran)
+        if adapter_fallback:
+            print(
+                "[EDGESIMPY] real backend smoke test failed; using adapter fallback raw-log generator.",
+                flush=True,
+            )
+        else:
+            print("[EDGESIMPY] real backend smoke test passed.", flush=True)
+
+    if backend == "edgesimpy_stub":
+        backend_state = "edgesimpy_stub"
+    elif real_object_created and real_simulation_ran:
+        backend_state = "edgesimpy_real_simulation_ran"
+    elif adapter_fallback:
+        backend_state = "edgesimpy_adapter_fallback"
+    elif installed:
+        backend_state = "edgesimpy_import_only"
+    else:
+        backend_state = "edgesimpy_import_failed"
 
     generation_config = _adapter_generation_config(config)
     seed_adapter(_data_seed(generation_config))
-    logs = generate_synthetic_full_logs(generation_config)
+    if backend == "edgesimpy" and real_object_created and real_simulation_ran:
+        logs = generate_real_backend_raw_logs(generation_config, smoke_metadata)
+        raw_log_generator_function = "src.simulation.edgesimpy_adapter.generate_real_backend_raw_logs"
+        raw_log_generator_basis = "real_edgesimpy_smoke_state_plus_adapter_expansion_v1"
+    else:
+        logs = generate_synthetic_full_logs(generation_config)
+        raw_log_generator_function = "src.simulation.synthetic_full_generator.generate_synthetic_full_logs"
+        raw_log_generator_basis = "synthetic_full_adapter_fallback_v1"
     inject_cpu_dominant_overload(logs, generation_config)
     output_dir = Path(output_dir)
     export_logs(output_dir, logs)
@@ -344,8 +585,8 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
     }
     print(
         "[EDGESIMPY] fallback_used="
-        f"{adapter_fallback} real_edgesimpy_objects_created={real_edgesimpy_objects_created} "
-        f"object_counts={object_counts}",
+        f"{adapter_fallback} real_object_created={real_object_created} "
+        f"real_simulation_ran={real_simulation_ran} object_counts={object_counts}",
         flush=True,
     )
     print(f"[EDGESIMPY] raw_logs_saved={output_dir}", flush=True)
@@ -354,7 +595,9 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
         "edgesimpy",
         backend,
         adapter_fallback,
-        real_edgesimpy_objects_created,
+        real_object_created,
+        real_simulation_ran,
+        bool(installed),
     )
 
     return {
@@ -374,14 +617,21 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
         "edgesimpy_import_error": None if installed else import_error,
         "edgesimpy_import_error_at_generation": None if installed else import_error,
         "edgesimpy_config": edge_cfg,
-        "edgesimpy_module": getattr(module, "__file__", None) if module is not None else None,
+        "edgesimpy_backend_state": backend_state,
+        "edgesimpy_module": smoke_metadata.get("edgesimpy_module") or (getattr(module, "__file__", None) if module is not None else None),
         "edgesimpy_adapter_fallback": adapter_fallback,
         "edgesimpy_adapter_fallback_at_generation": adapter_fallback,
         "fallback_reason": fallback_reason,
-        "real_edgesimpy_objects_created": real_edgesimpy_objects_created,
+        "real_object_created": real_object_created,
+        "real_simulation_ran": real_simulation_ran,
+        "real_edgesimpy_objects_created": real_object_created,
+        "created_object_types": smoke_metadata.get("created_object_types", []),
+        "edgesimpy_smoke_error": smoke_metadata.get("error"),
+        "edgesimpy_smoke_metadata": smoke_metadata,
         "edgesimpy_object_counts": object_counts,
         "adapter_entry_function": "src.simulation.edgesimpy_adapter.run_edgesimpy_adapter",
-        "raw_log_generator_function": "src.simulation.synthetic_full_generator.generate_synthetic_full_logs",
+        "raw_log_generator_function": raw_log_generator_function,
+        "raw_log_generator_basis": raw_log_generator_basis,
         "raw_log_files": raw_log_files,
         "python_executable": sys.executable,
         "python_version": sys.version,

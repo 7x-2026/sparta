@@ -80,9 +80,9 @@ def test_edgesimpy_real_generate_only_when_installed(tmp_path):
     assert manifest["simulator_backend"] == "edgesimpy"
     assert manifest["risk_injection"] == "adapter_cpu_overload_balancer_v1"
     assert bool(manifest["edgesimpy_installed"]) is installed
-    assert bool(manifest["edgesimpy_adapter_fallback"]) is True
-    assert bool(manifest["real_edgesimpy_objects_created"]) is False
-    expected_effective_backend = "edgesimpy_adapter_fallback"
+    real_ready = bool(manifest.get("real_object_created")) and bool(manifest.get("real_simulation_ran"))
+    expected_effective_backend = "edgesimpy_real" if real_ready else "edgesimpy_adapter_fallback"
+    assert bool(manifest["edgesimpy_adapter_fallback"]) is (not real_ready)
     assert manifest["effective_simulator_backend"] == expected_effective_backend
     assert manifest["effective_simulator_backend_at_generation"] == expected_effective_backend
     assert Path(manifest["raw_log_generation_provenance"]).exists()

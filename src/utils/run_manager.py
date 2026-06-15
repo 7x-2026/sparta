@@ -132,15 +132,25 @@ def effective_simulator_backend(
     simulator_backend: str,
     adapter_fallback: bool = False,
     real_edgesimpy_objects_created: bool = False,
+    real_simulation_ran: bool = False,
+    edgesimpy_import_success: bool | None = None,
 ) -> str:
     if data_source == "synthetic_full":
         return "synthetic_full"
     if simulator_backend == "edgesimpy_stub":
         return "edgesimpy_stub"
-    if simulator_backend == "edgesimpy" and real_edgesimpy_objects_created and not adapter_fallback:
+    if simulator_backend == "edgesimpy" and real_edgesimpy_objects_created and real_simulation_ran and not adapter_fallback:
         return "edgesimpy_real"
-    if simulator_backend == "edgesimpy":
+    if simulator_backend == "edgesimpy" and adapter_fallback:
         return "edgesimpy_adapter_fallback"
+    if simulator_backend == "edgesimpy" and edgesimpy_import_success is False:
+        return "edgesimpy_import_failed"
+    if simulator_backend == "edgesimpy" and real_edgesimpy_objects_created:
+        return "edgesimpy_real_objects_created"
+    if simulator_backend == "edgesimpy" and edgesimpy_import_success is True:
+        return "edgesimpy_import_only"
+    if simulator_backend == "edgesimpy":
+        return "edgesimpy_unverified"
     return simulator_backend or data_source
 
 
@@ -185,7 +195,12 @@ def build_initial_manifest(run_dir: Path, config: dict, config_path: str | Path,
         "edgesimpy_installed": None,
         "edgesimpy_import_error": None,
         "edgesimpy_config": edge_cfg,
+        "edgesimpy_backend_state": "not_generated",
         "edgesimpy_adapter_fallback": False,
+        "real_object_created": False,
+        "real_simulation_ran": False,
+        "real_edgesimpy_objects_created": False,
+        "created_object_types": [],
         "risk_injection": "none",
         "generation_command": None,
         "generation_mode": None,

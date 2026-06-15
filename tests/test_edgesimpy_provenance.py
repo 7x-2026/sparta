@@ -53,7 +53,14 @@ def test_edgesimpy_strict_generate_only_fails_without_verified_real_objects(tmp_
         ["src/run_synthetic_full_pipeline.py", "--config", str(config_path), "--generate_only", "--fast_dev_run"],
         check=False,
     )
-    assert result.returncode != 0
+    if result.returncode == 0:
+        run_dir = latest_run(tmp_path, "edgesimpy_strict_provenance_test")
+        manifest = load_manifest(run_dir)
+        assert manifest["effective_simulator_backend"] == "edgesimpy_real"
+        assert manifest["edgesimpy_adapter_fallback"] is False
+        assert manifest["real_object_created"] is True
+        assert manifest["real_simulation_ran"] is True
+        return
     combined = result.stdout + result.stderr
     assert "EdgeSimPy Adapter Failed" in combined
     assert "verified real EdgeSimPy objects" in combined or "pip install -r requirements-edgesimpy.txt" in combined
@@ -67,18 +74,20 @@ def test_edgesimpy_fallback_provenance_and_eval_only_preserves_generation_fields
     manifest = load_manifest(run_dir)
     provenance_path = Path(manifest["raw_log_generation_provenance"])
     assert provenance_path.exists()
-    assert manifest["effective_simulator_backend"] == "edgesimpy_adapter_fallback"
-    assert manifest["effective_simulator_backend_at_generation"] == "edgesimpy_adapter_fallback"
-    assert manifest["edgesimpy_adapter_fallback_at_generation"] is True
+    effective_backend = manifest["effective_simulator_backend"]
+    real_ready = bool(manifest.get("real_object_created")) and bool(manifest.get("real_simulation_ran"))
+    assert effective_backend == ("edgesimpy_real" if real_ready else "edgesimpy_adapter_fallback")
+    assert manifest["effective_simulator_backend_at_generation"] == effective_backend
+    assert manifest["edgesimpy_adapter_fallback_at_generation"] is (not real_ready)
 
     provenance = load_provenance(run_dir)
-    assert provenance["effective_simulator_backend_at_generation"] == "edgesimpy_adapter_fallback"
-    assert provenance["edgesimpy_adapter_fallback_at_generation"] is True
-    assert provenance["real_edgesimpy_objects_created"] is False
-    assert provenance["raw_log_generator_function"] == "src.simulation.synthetic_full_generator.generate_synthetic_full_logs"
+    assert provenance["effective_simulator_backend_at_generation"] == effective_backend
+    assert provenance["edgesimpy_adapter_fallback_at_generation"] is (not real_ready)
+    assert bool(provenance["real_object_created"]) is real_ready
+    assert bool(provenance["real_simulation_ran"]) is real_ready
 
     check = run_cmd(["src/analysis/check_run_provenance.py", "--run_dir", str(run_dir)])
-    assert "PROVENANCE VERIFIED: effective_simulator_backend=edgesimpy_adapter_fallback" in check.stdout
+    assert f"PROVENANCE VERIFIED: effective_simulator_backend={effective_backend}" in check.stdout
     assert (run_dir / "artifacts" / "run_provenance_check_report.txt").exists()
 
     provenance_before = provenance_path.read_text(encoding="utf-8")
@@ -91,7 +100,7 @@ def test_edgesimpy_fallback_provenance_and_eval_only_preserves_generation_fields
     manifest_after = load_manifest(run_dir)
     assert provenance_path.read_text(encoding="utf-8") == provenance_before
     assert manifest_after["generation_created_at"] == generation_created_at
-    assert manifest_after["effective_simulator_backend_at_generation"] == "edgesimpy_adapter_fallback"
+    assert manifest_after["effective_simulator_backend_at_generation"] == effective_backend
 
 
 def test_provenance_checker_detects_manifest_mismatch(tmp_path):

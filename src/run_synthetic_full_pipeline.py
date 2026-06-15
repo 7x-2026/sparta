@@ -196,7 +196,9 @@ def persist_run_config_and_manifest(run_dir: Path, config_path: str | Path, conf
             data_source(config),
             simulator_backend(config),
             adapter_fallback,
-            bool(existing.get("real_edgesimpy_objects_created", False)),
+            bool(existing.get("real_object_created", existing.get("real_edgesimpy_objects_created", False))),
+            bool(existing.get("real_simulation_ran", False)),
+            existing.get("edgesimpy_installed"),
         )
         now = timestamp_now()
         manifest.update(
@@ -296,7 +298,9 @@ def record_raw_log_generation_provenance(run_dir: Path, metadata: dict) -> None:
             str(metadata.get("data_source", "synthetic_full")),
             str(metadata.get("simulator_backend", metadata.get("requested_backend", "synthetic_full"))),
             bool(metadata.get("edgesimpy_adapter_fallback_at_generation", metadata.get("edgesimpy_adapter_fallback", False))),
-            bool(metadata.get("real_edgesimpy_objects_created", False)),
+            bool(metadata.get("real_object_created", metadata.get("real_edgesimpy_objects_created", False))),
+            bool(metadata.get("real_simulation_ran", False)),
+            metadata.get("edgesimpy_installed_at_generation", metadata.get("edgesimpy_installed")),
         )
     fallback_at_generation = bool(
         metadata.get("edgesimpy_adapter_fallback_at_generation", metadata.get("edgesimpy_adapter_fallback", False))
@@ -317,6 +321,7 @@ def record_raw_log_generation_provenance(run_dir: Path, metadata: dict) -> None:
         "data_source": metadata.get("data_source"),
         "requested_backend": metadata.get("requested_backend", metadata.get("simulator_backend")),
         "simulator_backend": metadata.get("simulator_backend"),
+        "edgesimpy_backend_state": metadata.get("edgesimpy_backend_state"),
         "effective_simulator_backend_at_generation": effective_backend,
         "edgesimpy_adapter_fallback_at_generation": fallback_at_generation,
         "fallback_reason": metadata.get("fallback_reason"),
@@ -326,8 +331,13 @@ def record_raw_log_generation_provenance(run_dir: Path, metadata: dict) -> None:
             metadata.get("edgesimpy_import_error"),
         ),
         "edgesimpy_module": metadata.get("edgesimpy_module"),
-        "real_edgesimpy_objects_created": bool(metadata.get("real_edgesimpy_objects_created", False)),
+        "real_object_created": bool(metadata.get("real_object_created", metadata.get("real_edgesimpy_objects_created", False))),
+        "real_simulation_ran": bool(metadata.get("real_simulation_ran", False)),
+        "real_edgesimpy_objects_created": bool(metadata.get("real_object_created", metadata.get("real_edgesimpy_objects_created", False))),
+        "created_object_types": metadata.get("created_object_types", []),
         "edgesimpy_object_counts": metadata.get("edgesimpy_object_counts", {}),
+        "edgesimpy_smoke_error": metadata.get("edgesimpy_smoke_error"),
+        "raw_log_generator_basis": metadata.get("raw_log_generator_basis"),
         "adapter_entry_function": metadata.get("adapter_entry_function"),
         "raw_log_generator_function": metadata.get("raw_log_generator_function"),
         "raw_log_schema_version": metadata.get("raw_log_schema_version", "v1"),
@@ -450,9 +460,13 @@ def run_raw_log_generation(run_dir: Path, config_path: Path, config: dict) -> No
                 "edgesimpy_config": {},
                 "edgesimpy_adapter_fallback": False,
                 "edgesimpy_adapter_fallback_at_generation": False,
+                "real_object_created": False,
+                "real_simulation_ran": False,
                 "real_edgesimpy_objects_created": False,
+                "created_object_types": [],
                 "edgesimpy_object_counts": {},
                 "raw_log_generator_function": "src.simulation.synthetic_full_generator.generate_synthetic_full_logs",
+                "raw_log_generator_basis": "synthetic_full_v1",
                 "python_executable": sys.executable,
                 "python_version": sys.version,
             },
@@ -460,10 +474,53 @@ def run_raw_log_generation(run_dir: Path, config_path: Path, config: dict) -> No
         return
     if source == "edgesimpy":
         print("[1/6] Generating raw logs...", flush=True)
-        from src.simulation.edgesimpy_adapter import run_edgesimpy_adapter
+        from src.simulation.edgesimpy_adapter import run_edgesimpy_adapter, run_edgesimpy_real_smoke, try_import_edgesimpy
 
         raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
-        metadata = run_edgesimpy_adapter(config, raw_dir)
+        try:
+            metadata = run_edgesimpy_adapter(config, raw_dir)
+        except Exception:
+            installed, module, import_error = try_import_edgesimpy()
+            smoke = run_edgesimpy_real_smoke(config) if installed else {}
+            real_object_created = bool(smoke.get("real_object_created", False))
+            real_simulation_ran = bool(smoke.get("real_simulation_ran", False))
+            if not installed:
+                backend_state = "edgesimpy_import_failed"
+            elif real_simulation_ran:
+                backend_state = "edgesimpy_real_simulation_ran"
+            elif real_object_created:
+                backend_state = "edgesimpy_real_objects_created"
+            else:
+                backend_state = "edgesimpy_import_only"
+            update_run_manifest(
+                run_dir,
+                {
+                    "data_source": "edgesimpy",
+                    "requested_backend": simulator_backend(config),
+                    "simulator_backend": simulator_backend(config),
+                    "effective_simulator_backend": effective_simulator_backend(
+                        "edgesimpy",
+                        simulator_backend(config),
+                        False,
+                        real_object_created,
+                        real_simulation_ran,
+                        bool(installed),
+                    ),
+                    "edgesimpy_backend_state": backend_state,
+                    "edgesimpy_installed": bool(installed),
+                    "edgesimpy_import_error": None if installed else import_error,
+                    "edgesimpy_module": smoke.get("edgesimpy_module") or (getattr(module, "__file__", None) if module is not None else None),
+                    "edgesimpy_adapter_fallback": False,
+                    "real_object_created": real_object_created,
+                    "real_simulation_ran": real_simulation_ran,
+                    "real_edgesimpy_objects_created": real_object_created,
+                    "created_object_types": smoke.get("created_object_types", []),
+                    "edgesimpy_object_counts": smoke.get("edgesimpy_object_counts", {}),
+                    "edgesimpy_smoke_error": smoke.get("error"),
+                    "last_updated_at": timestamp_now(),
+                },
+            )
+            raise
         record_raw_log_generation_provenance(run_dir, metadata)
         return
     raise ValueError(f"Unsupported data.source: {source}")

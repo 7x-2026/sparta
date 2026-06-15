@@ -403,12 +403,18 @@ def write_report_v2(output_path: Path, label_rows: list[dict], scenario_rows: li
     effective_backend = manifest.get("effective_simulator_backend", "unknown")
     effective_backend_at_generation = manifest.get("effective_simulator_backend_at_generation", effective_backend)
     provenance_path = manifest.get("raw_log_generation_provenance", "")
+    edgesimpy_backend_state = manifest.get("edgesimpy_backend_state", "")
+    real_object_created = manifest.get("real_object_created", manifest.get("real_edgesimpy_objects_created", ""))
+    real_simulation_ran = manifest.get("real_simulation_ran", "")
 
     lines = [
         "SPARTA synthetic full 数据审计报告",
         "",
         f"effective_simulator_backend: {effective_backend}",
         f"effective_simulator_backend_at_generation: {effective_backend_at_generation}",
+        f"edgesimpy_backend_state: {edgesimpy_backend_state}",
+        f"real_object_created: {real_object_created}",
+        f"real_simulation_ran: {real_simulation_ran}",
         f"raw_log_generation_provenance: {provenance_path}",
         "",
         f"结论：{'通过正式实验数据要求' if passed else '未通过正式实验数据要求'}。",
