@@ -1,0 +1,217 @@
+project:
+  name: sparta_edgesimpy_real_strict_seed42_cpu_precursor_v1
+  root_dir: .
+  output_dir: results/edgesimpy_real_strict_seed42_cpu_precursor_v1
+  checkpoint_dir: checkpoints/edgesimpy_real_strict_seed42_cpu_precursor_v1
+  log_dir: logs/edgesimpy_real_strict_seed42_cpu_precursor_v1
+
+seed: 42
+
+experiment:
+  name: edgesimpy_real_strict_seed42_cpu_precursor_v1
+  seed: 42
+  data_seed: 42
+  train_seed: 0
+
+run:
+  output_root: run
+  create_new_run: true
+  run_id: null
+  resume_run: null
+  overwrite: false
+  save_config: true
+  save_manifest: true
+  save_logs: true
+
+paths:
+  raw_logs_dir: null
+  processed_dir: null
+  dataset_dir: null
+  checkpoint_dir: null
+  result_dir: null
+  audit_dir: null
+  log_dir: null
+
+data:
+  source: edgesimpy
+  mode: edgesimpy
+  base_dir: data/edgesimpy_real_strict_seed42_cpu_precursor_v1
+  raw_logs_dir: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/raw_logs
+  processed_dir: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/processed
+  dataset_dir: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/dataset
+  window: 12
+  horizon: 5
+  input_window: 12
+  pred_horizon: 5
+  max_nodes: 8
+  max_links: 12
+  node_feat_dim: 14
+  link_feat_dim: 8
+  service_feat_dim: 12
+  sla_feat_dim: 5
+  node_feature_names:
+    - cpu_util
+    - mem_util
+    - queue_len
+    - available_cpu
+    - available_mem
+    - node_type
+    - node_degree
+    - is_current_edge
+    - cpu_util_slope
+    - available_cpu_slope
+    - cpu_pressure_persistence
+    - colocated_service_count
+    - colocated_request_rate_sum
+    - colocated_request_rate_slope
+  link_feature_names:
+    - delay_ms
+    - bandwidth
+    - loss
+    - jitter_ms
+    - queue_delay_ms
+    - bandwidth_util
+    - is_current_link
+    - hop_position
+  service_feature_names:
+    - request_rate
+    - response_time
+    - service_type
+    - base_response_time
+    - dependency_count
+    - request_rate_slope
+    - response_time_slope
+    - path_cpu_pressure_mean
+    - path_cpu_pressure_max
+    - path_cpu_pressure_slope
+    - path_available_cpu_min
+    - path_queue_len_slope
+  sla_feature_names:
+    - max_delay
+    - max_loss
+    - min_bandwidth
+    - reliability_req
+    - cost_weight
+  num_nodes: 8
+  num_links: 12
+  num_edge_nodes: 8
+  num_access_nodes: 4
+  num_users: 80
+  num_services: 60
+  num_steps: 1000
+  train_ratio: 0.6
+  val_ratio: 0.2
+  test_ratio: 0.2
+  train_path: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/dataset/train.pkl
+  val_path: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/dataset/val.pkl
+  test_path: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/dataset/test.pkl
+  metadata_path: data/edgesimpy_real_strict_seed42_cpu_precursor_v1/dataset/metadata.json
+  risk_injection: cpu_precursor_v1
+  cpu_precursor:
+    enabled: true
+    affected_node_ratio: 0.25
+    affected_service_ratio: 0.35
+    warmup_steps: 8
+    growth_steps: 12
+    request_rate_growth_min: 0.08
+    request_rate_growth_max: 0.18
+    cpu_pressure_growth_min: 0.05
+    cpu_pressure_growth_max: 0.15
+    colocated_service_boost: 0.20
+    queue_lag_steps: 2
+    delay_lag_steps: 3
+    noise_std: 0.03
+    max_cpu_util: 0.98
+    min_available_cpu: 0.02
+    enable_cpu_slope_features: true
+
+edgesimpy:
+  backend: edgesimpy
+  allow_adapter_fallback: false
+  num_steps: 1000
+  num_edge_nodes: 8
+  num_access_nodes: 4
+  num_cloud_nodes: 1
+  num_users: 80
+  num_services: 60
+  topology: small_world
+  enable_mobility: false
+  enable_trace: false
+
+simulation:
+  topology: small_world
+  scenario_schedule: interleaved
+  max_scenario_ratio_per_split: 0.45
+  max_attribution_majority_ratio: 0.55
+  target_label_ratio:
+    normal: 0.45
+    risky: 0.35
+    violated: 0.20
+  allowed_label_ratio_range:
+    normal: [0.20, 0.70]
+    risky: [0.05, 0.60]
+    violated: [0.02, 0.45]
+  split_balance_check:
+    enabled: true
+    max_label_ratio_gap: 0.30
+    max_scenario_ratio_per_split: 0.55
+    max_top_node_attr_ratio: 0.70
+    max_top_link_attr_ratio: 0.70
+    min_metric_ratio:
+      queue: 0.0
+  generation_retry:
+    enabled: true
+    max_retries: 20
+  scenarios:
+    - normal
+    - burst
+    - node_overload
+    - link_congestion
+    - mixed
+  delay_cap_ms: 300.0
+  bandwidth_cap: 100.0
+  queue_cap: 50.0
+  queue_metric_cap: 28.0
+  queue_growth_cap: 8.0
+  request_cap: 100.0
+  response_cap_ms: 420.0
+
+model:
+  name: sparta
+  hidden_dim: 32
+  temporal_layers: 1
+  topology_layers: 1
+  n_heads: 2
+  ffn_dim: 128
+  dropout: 0.1
+  use_sla_gate: true
+  use_topology: true
+  use_attribution: true
+
+loss:
+  risk_loss: ce
+  lambda_node: 0.2
+  lambda_link: 0.2
+  lambda_metric: 0.8
+  metric_loss_type: focal
+  metric_class_weighting: inverse_sqrt_freq
+  metric_focal_gamma: 2.0
+  ignore_attribution_for_normal: true
+  ignore_index: -100
+
+train:
+  epochs: 60
+  batch_size: 64
+  early_stop_patience: 12
+  lr: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  num_workers: 0
+  device: auto
+  best_metric: macro_f1
+  checkpoint_name: "{model}_best.pth"
+
+validation:
+  require_all_classes: true
+  min_risky_violated_ratio: 0.15
+  min_samples_per_class: 1

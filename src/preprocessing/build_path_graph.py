@@ -16,6 +16,40 @@ from src.utils.io import load_pickle, read_csv_rows, save_pickle
 
 NODE_TYPE_ID = {"access": 0.25, "edge": 0.65, "cloud": 1.0}
 SERVICE_TYPE_ID = {"latency": 0.0, "reliability": 0.5, "cost": 1.0}
+BASE_NODE_FEATURE_NAMES = [
+    "cpu_util",
+    "mem_util",
+    "queue_len",
+    "available_cpu",
+    "available_mem",
+    "node_type",
+    "node_degree",
+    "is_current_edge",
+]
+CPU_PRECURSOR_NODE_FEATURE_NAMES = [
+    "cpu_util_slope",
+    "available_cpu_slope",
+    "cpu_pressure_persistence",
+    "colocated_service_count",
+    "colocated_request_rate_sum",
+    "colocated_request_rate_slope",
+]
+BASE_SERVICE_FEATURE_NAMES = [
+    "request_rate",
+    "response_time",
+    "service_type",
+    "base_response_time",
+    "dependency_count",
+]
+CPU_PRECURSOR_SERVICE_FEATURE_NAMES = [
+    "request_rate_slope",
+    "response_time_slope",
+    "path_cpu_pressure_mean",
+    "path_cpu_pressure_max",
+    "path_cpu_pressure_slope",
+    "path_available_cpu_min",
+    "path_queue_len_slope",
+]
 
 
 def _f(row: dict, key: str, default: float = 0.0) -> float:
@@ -65,9 +99,13 @@ def load_logs(raw_dir: str | Path) -> dict:
         "service": {},
         "path": {},
         "sla": {},
+        "services_by_time": {},
+        "paths_by_time": {},
         "all_nodes": set(),
         "all_links": set(),
+        "all_services": set(),
         "link_pairs": {},
+        "colocated_by_time_node": {},
     }
     for row in rows["node"]:
         t = _i(row, "time")
@@ -83,11 +121,34 @@ def load_logs(raw_dir: str | Path) -> dict:
         indexes["all_links"].add(lid)
         indexes["link_pairs"][lid] = (src, dst)
     for row in rows["service"]:
-        indexes["service"][(_i(row, "time"), _i(row, "service_id"))] = row
+        time = _i(row, "time")
+        service_id = _i(row, "service_id")
+        indexes["service"][(time, service_id)] = row
+        indexes["services_by_time"].setdefault(time, []).append(row)
+        indexes["all_services"].add(service_id)
     for row in rows["path"]:
-        indexes["path"][(_i(row, "time"), _i(row, "service_id"))] = row
+        time = _i(row, "time")
+        service_id = _i(row, "service_id")
+        indexes["path"][(time, service_id)] = row
+        indexes["paths_by_time"].setdefault(time, []).append(row)
+        indexes["all_services"].add(service_id)
     for row in rows["sla"]:
         indexes["sla"][_i(row, "service_id")] = row
+    for time, service_rows in indexes["services_by_time"].items():
+        colocated: dict[str, dict[str, float]] = {}
+        for service_row in service_rows:
+            service_id = _i(service_row, "service_id")
+            path_row = indexes["path"].get((time, service_id), {})
+            nodes = set(_split_pipe(path_row.get("path_nodes", "")))
+            current_edge = service_row.get("current_edge", "")
+            if current_edge:
+                nodes.add(current_edge)
+            for node_id in nodes:
+                stats = colocated.setdefault(node_id, {"count": 0.0, "request_sum": 0.0})
+                stats["count"] += 1.0
+                stats["request_sum"] += _f(service_row, "request_rate")
+        for node_id, stats in colocated.items():
+            indexes["colocated_by_time_node"][(time, node_id)] = stats
     return {"rows": rows, "idx": indexes}
 
 
@@ -122,11 +183,115 @@ def select_links(path_row: dict, logs: dict, node_ids: list[str], max_links: int
     return chosen[:max_links]
 
 
-def make_node_feature(row: dict | None, node_id: str, current_edge: str, degree_max: float, queue_cap: float) -> list[float]:
-    if row is None:
-        return [0.0] * 8
-    queue_norm = min(_f(row, "queue_len") / max(queue_cap, 1.0), 1.0)
+def cpu_precursor_features_enabled(config: dict) -> bool:
+    data_cfg = config.get("data", {})
+    precursor_cfg = data_cfg.get("cpu_precursor", {})
+    return bool(precursor_cfg.get("enable_cpu_slope_features", False)) or int(data_cfg.get("node_feat_dim", 8)) > 8
+
+
+def _clip_signed(value: float, limit: float = 1.0) -> float:
+    return float(np.clip(value, -limit, limit))
+
+
+def _safe_slope(values: list[float], scale: float = 1.0) -> float:
+    if len(values) < 2:
+        return 0.0
+    return _clip_signed((values[-1] - values[0]) / max(scale, 1e-6))
+
+
+def _fit_dim(values: list[float], dim: int) -> list[float]:
+    if len(values) == dim:
+        return values
+    if len(values) > dim:
+        return values[:dim]
+    return values + [0.0] * (dim - len(values))
+
+
+def _node_history(logs: dict, history: list[int], node_id: str) -> list[dict | None]:
+    return [logs["idx"]["node"].get((ht, node_id)) for ht in history]
+
+
+def node_precursor_features(
+    logs: dict,
+    history: list[int],
+    node_id: str,
+    caps: dict,
+) -> list[float]:
+    rows = _node_history(logs, history, node_id)
+    cpu_values = [_f(row, "cpu_util") for row in rows]
+    available_values = [_f(row, "available_cpu", 1.0) for row in rows]
+    pressure_values = [max(cpu, 1.0 - available) for cpu, available in zip(cpu_values, available_values)]
+    colocated = [logs["idx"]["colocated_by_time_node"].get((ht, node_id), {"count": 0.0, "request_sum": 0.0}) for ht in history]
+    counts = [float(item.get("count", 0.0)) for item in colocated]
+    request_sums = [float(item.get("request_sum", 0.0)) for item in colocated]
+    service_count = max(len(logs["idx"].get("all_services", [])), 1)
+    request_sum_cap = max(caps["request"] * service_count, 1.0)
     return [
+        _safe_slope(cpu_values),
+        _safe_slope(available_values),
+        float(np.mean([1.0 if value >= 0.75 else 0.0 for value in pressure_values])) if pressure_values else 0.0,
+        float(np.clip(max(counts, default=0.0) / service_count, 0.0, 1.0)),
+        float(np.clip(max(request_sums, default=0.0) / request_sum_cap, 0.0, 1.0)),
+        _safe_slope(request_sums, request_sum_cap),
+    ]
+
+
+def service_precursor_features(
+    logs: dict,
+    history: list[int],
+    service_id: int,
+    caps: dict,
+) -> list[float]:
+    service_rows = [logs["idx"]["service"].get((ht, service_id)) for ht in history]
+    request_values = [_f(row, "request_rate") for row in service_rows]
+    response_values = [_f(row, "response_time") for row in service_rows]
+    path_cpu_mean: list[float] = []
+    path_cpu_max: list[float] = []
+    path_available_min: list[float] = []
+    path_queue_values: list[float] = []
+    for ht in history:
+        path_row = logs["idx"]["path"].get((ht, service_id))
+        path_nodes = _split_pipe(path_row.get("path_nodes", "")) if path_row else []
+        cpu_pressures: list[float] = []
+        available_values: list[float] = []
+        queue_values: list[float] = []
+        for node_id in path_nodes:
+            node_row = logs["idx"]["node"].get((ht, node_id))
+            if node_row is None:
+                continue
+            cpu = _f(node_row, "cpu_util")
+            available = _f(node_row, "available_cpu", 1.0)
+            cpu_pressures.append(max(cpu, 1.0 - available))
+            available_values.append(available)
+            queue_values.append(_f(node_row, "queue_len"))
+        path_cpu_mean.append(float(np.mean(cpu_pressures)) if cpu_pressures else 0.0)
+        path_cpu_max.append(max(cpu_pressures, default=0.0))
+        path_available_min.append(min(available_values, default=1.0))
+        path_queue_values.append(max(queue_values, default=0.0))
+    return [
+        _safe_slope(request_values, caps["request"]),
+        _safe_slope(response_values, caps["response"]),
+        float(np.clip(max(path_cpu_mean, default=0.0), 0.0, 1.0)),
+        float(np.clip(max(path_cpu_max, default=0.0), 0.0, 1.0)),
+        _safe_slope(path_cpu_max),
+        float(np.clip(min(path_available_min, default=1.0), 0.0, 1.0)),
+        _safe_slope(path_queue_values, max(caps.get("queue", 50.0), 1.0)),
+    ]
+
+
+def make_node_feature(
+    row: dict | None,
+    node_id: str,
+    current_edge: str,
+    degree_max: float,
+    queue_cap: float,
+    extra: list[float] | None = None,
+    target_dim: int = 8,
+) -> list[float]:
+    if row is None:
+        return [0.0] * target_dim
+    queue_norm = min(_f(row, "queue_len") / max(queue_cap, 1.0), 1.0)
+    values = [
         float(np.clip(_f(row, "cpu_util"), 0.0, 1.0)),
         float(np.clip(_f(row, "mem_util"), 0.0, 1.0)),
         float(np.clip(queue_norm, 0.0, 1.0)),
@@ -136,6 +301,9 @@ def make_node_feature(row: dict | None, node_id: str, current_edge: str, degree_
         float(np.clip(_f(row, "node_degree") / max(degree_max, 1.0), 0.0, 1.0)),
         1.0 if node_id == current_edge else 0.0,
     ]
+    if extra:
+        values.extend(extra)
+    return _fit_dim(values, target_dim)
 
 
 def make_link_feature(row: dict | None, link_id: str, path_links: list[str], caps: dict) -> list[float]:
@@ -159,16 +327,19 @@ def make_link_feature(row: dict | None, link_id: str, path_links: list[str], cap
     ]
 
 
-def make_service_feature(row: dict | None, caps: dict) -> list[float]:
+def make_service_feature(row: dict | None, caps: dict, extra: list[float] | None = None, target_dim: int = 5) -> list[float]:
     if row is None:
-        return [0.0] * 5
-    return [
+        return [0.0] * target_dim
+    values = [
         float(np.clip(_f(row, "request_rate") / caps["request"], 0.0, 1.0)),
         float(np.clip(_f(row, "response_time") / caps["response"], 0.0, 1.0)),
         SERVICE_TYPE_ID.get(row.get("service_type", "latency"), 0.0),
         float(np.clip(_f(row, "base_response_time") / caps["response"], 0.0, 1.0)),
         float(np.clip(_f(row, "dependency_count") / 5.0, 0.0, 1.0)),
     ]
+    if extra:
+        values.extend(extra)
+    return _fit_dim(values, target_dim)
 
 
 def make_sla_feature(row: dict, caps: dict) -> list[float]:
@@ -198,7 +369,9 @@ def build_sample(service_id: int, time: int, logs: dict, config: dict) -> dict:
         "bandwidth": float(sim_cfg.get("bandwidth_cap", 100.0)),
         "request": float(sim_cfg.get("request_cap", 100.0)),
         "response": float(sim_cfg.get("response_cap_ms", 400.0)),
+        "queue": float(sim_cfg.get("queue_cap", 50.0)),
     }
+    use_cpu_precursor_features = cpu_precursor_features_enabled(config)
 
     node_x = np.zeros((L, max_nodes, data_cfg["node_feat_dim"]), dtype=np.float32)
     link_x = np.zeros((L, max_links, data_cfg["link_feat_dim"]), dtype=np.float32)
@@ -215,6 +388,7 @@ def build_sample(service_id: int, time: int, logs: dict, config: dict) -> dict:
         hist_path_links = _split_pipe(hist_path.get("path_links", ""))
         current_edge = hist_service.get("current_edge", service_row.get("current_edge", ""))
         for ni, node_id in enumerate(node_ids):
+            node_extra = node_precursor_features(logs, history[: li + 1], node_id, caps) if use_cpu_precursor_features else None
             node_x[li, ni] = np.asarray(
                 make_node_feature(
                     logs["idx"]["node"].get((ht, node_id)),
@@ -222,6 +396,8 @@ def build_sample(service_id: int, time: int, logs: dict, config: dict) -> dict:
                     current_edge,
                     degree_max,
                     float(sim_cfg.get("queue_cap", 50.0)),
+                    extra=node_extra,
+                    target_dim=int(data_cfg["node_feat_dim"]),
                 ),
                 dtype=np.float32,
             )
@@ -230,7 +406,11 @@ def build_sample(service_id: int, time: int, logs: dict, config: dict) -> dict:
                 make_link_feature(logs["idx"]["link"].get((ht, link_id)), link_id, hist_path_links, caps),
                 dtype=np.float32,
             )
-        service_x[li] = np.asarray(make_service_feature(hist_service, caps), dtype=np.float32)
+        service_extra = service_precursor_features(logs, history[: li + 1], service_id, caps) if use_cpu_precursor_features else None
+        service_x[li] = np.asarray(
+            make_service_feature(hist_service, caps, extra=service_extra, target_dim=int(data_cfg["service_feat_dim"])),
+            dtype=np.float32,
+        )
 
     sla_x = np.asarray(make_sla_feature(logs["idx"]["sla"][service_id], caps), dtype=np.float32)
     adj = np.zeros((max_nodes, max_nodes), dtype=np.float32)

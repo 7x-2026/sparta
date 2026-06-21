@@ -63,6 +63,12 @@ def main() -> None:
     metadata = {
         "format": "pkl",
         "schema_version": "debug_v0",
+        "risk_metric_scores": {
+            "shape": [5],
+            "use_future_information": True,
+            "used_as_supervision_only": True,
+            "used_as_model_input": False,
+        },
         "input_window": config["data"]["input_window"],
         "pred_horizon": config["data"]["pred_horizon"],
         "max_nodes": config["data"]["max_nodes"],

@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
 
 from src.simulation.export_logs import export_logs
 from src.simulation.log_schema import LOG_SCHEMA_VERSION
+from src.simulation.risk_injection import CPU_PRECURSOR_RISK_INJECTION, inject_cpu_precursor_v1
 from src.simulation.synthetic_scenarios import SCENARIOS
 from src.simulation.synthetic_full_generator import generate_synthetic_full_logs
 from src.utils.config import load_config, resolve_path
@@ -573,8 +574,23 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
         logs = generate_synthetic_full_logs(generation_config)
         raw_log_generator_function = "src.simulation.synthetic_full_generator.generate_synthetic_full_logs"
         raw_log_generator_basis = "synthetic_full_adapter_fallback_v1"
-    inject_cpu_dominant_overload(logs, generation_config)
     output_dir = Path(output_dir)
+    risk_injection_metadata: dict = {}
+    requested_risk_injection = str(generation_config.get("data", {}).get("risk_injection", "") or "").lower()
+    cpu_precursor_cfg = generation_config.get("data", {}).get("cpu_precursor", {})
+    if requested_risk_injection == CPU_PRECURSOR_RISK_INJECTION or bool(cpu_precursor_cfg.get("enabled", False)):
+        risk_injection_metadata = inject_cpu_precursor_v1(
+            logs,
+            generation_config,
+            artifacts_dir=output_dir.parent / "artifacts",
+        )
+    else:
+        inject_cpu_dominant_overload(logs, generation_config)
+        risk_injection_metadata = {
+            "risk_injection": RISK_INJECTION_NAME,
+            "cpu_precursor_enabled": False,
+            "cpu_precursor_episode_count": 0,
+        }
     export_logs(output_dir, logs)
     raw_log_files = {
         "node_log.csv": str(output_dir / "node_log.csv"),
@@ -636,7 +652,7 @@ def run_edgesimpy_adapter(config: dict, output_dir: Path) -> dict:
         "python_executable": sys.executable,
         "python_version": sys.version,
         "conda_env": os.environ.get("CONDA_DEFAULT_ENV"),
-        "risk_injection": RISK_INJECTION_NAME,
+        **risk_injection_metadata,
     }
 
 

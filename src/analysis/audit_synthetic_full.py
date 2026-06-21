@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.metrics import compute_attribution_majority_baseline
 from src.utils.io import ensure_dir, load_pickle, read_csv_rows, write_csv_rows
 
 
@@ -162,38 +163,29 @@ def attribution_distribution_rows(splits: dict[str, list[dict]]) -> list[dict]:
     return rows
 
 
-def majority_accuracy(samples: list[dict], field: str) -> tuple[int | str, float, int, int]:
-    valid = valid_attr_samples(samples)
-    if not valid:
-        return "", math.nan, 0, 0
-    counts = Counter(int(sample[field]) for sample in valid)
-    majority_value, majority_count = counts.most_common(1)[0]
-    return majority_value, majority_count / len(valid), majority_count, len(valid)
+def _csv_safe_baseline(row: dict) -> dict:
+    out = dict(row)
+    for key, value in list(out.items()):
+        if isinstance(value, dict):
+            out[key] = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return out
 
 
 def attribution_majority_baseline_rows(splits: dict[str, list[dict]]) -> list[dict]:
     rows: list[dict] = []
     all_samples = [sample for split in SPLITS for sample in splits[split]]
     for split, samples in {**splits, "all": all_samples}.items():
-        node_value, node_acc, node_count, total = majority_accuracy(samples, "risk_node")
-        link_value, link_acc, link_count, _ = majority_accuracy(samples, "risk_link")
-        metric_value, metric_acc, metric_count, _ = majority_accuracy(samples, "risk_metric")
-        rows.append(
+        valid_row = compute_attribution_majority_baseline(samples, split=split, attr_mask_only=True)
+        global_row = compute_attribution_majority_baseline(samples, split=split, attr_mask_only=False)
+        valid_row.update(
             {
-                "split": split,
-                "valid_attr_samples": total,
-                "node_majority_value": node_value,
-                "node_majority_acc": node_acc,
-                "node_majority_count": node_count,
-                "link_majority_value": link_value,
-                "link_majority_acc": link_acc,
-                "link_majority_count": link_count,
-                "metric_majority_value": metric_value,
-                "metric_majority_name": METRICS.get(metric_value, str(metric_value)) if metric_value != "" else "",
-                "metric_majority_acc": metric_acc,
-                "metric_majority_count": metric_count,
+                "audit_global_metric_majority_acc": global_row["metric_majority_acc"],
+                "audit_global_metric_majority_value": global_row["metric_majority_value"],
+                "audit_global_metric_majority_name": global_row["metric_majority_name"],
+                "audit_global_denominator": global_row["denominator"],
             }
         )
+        rows.append(_csv_safe_baseline(valid_row))
     return rows
 
 

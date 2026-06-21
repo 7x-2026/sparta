@@ -129,9 +129,12 @@ model:
 
 loss:
   risk_loss: ce
-  lambda_node: 0.3
-  lambda_link: 0.3
-  lambda_metric: 0.2
+  lambda_node: 0.2
+  lambda_link: 0.2
+  lambda_metric: 0.8
+  metric_loss_type: focal
+  metric_class_weighting: inverse_sqrt_freq
+  metric_focal_gamma: 2.0
   ignore_attribution_for_normal: true
   ignore_index: -100
 

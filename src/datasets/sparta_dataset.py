@@ -8,6 +8,15 @@ from torch.utils.data import Dataset
 from src.utils.io import load_pickle
 
 
+def _metric_score_fallback(sample: dict) -> list[float]:
+    metric = int(sample.get("risk_metric", -100))
+    if 0 <= metric < 5:
+        scores = [0.0] * 5
+        scores[metric] = 1.0
+        return scores
+    return [0.0] * 5
+
+
 class SPARTADataset(Dataset):
     def __init__(self, pkl_path: str | Path, config: dict | None = None):
         self.path = Path(pkl_path)
@@ -54,6 +63,10 @@ class SPARTADataset(Dataset):
             "risk_node": torch.tensor(int(sample["risk_node"]), dtype=torch.long),
             "risk_link": torch.tensor(int(sample["risk_link"]), dtype=torch.long),
             "risk_metric": torch.tensor(int(sample["risk_metric"]), dtype=torch.long),
+            "risk_metric_scores": torch.as_tensor(
+                sample.get("risk_metric_scores", _metric_score_fallback(sample)),
+                dtype=torch.float32,
+            ),
             "attr_mask": torch.tensor(int(sample["attr_mask"]), dtype=torch.bool),
             "sample_time": torch.tensor(int(sample["time"]), dtype=torch.long),
             "service_id": torch.tensor(int(sample["service_id"]), dtype=torch.long),

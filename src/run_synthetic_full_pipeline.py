@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audit_only", action="store_true")
     parser.add_argument("--train_only", action="store_true")
     parser.add_argument("--eval_only", action="store_true")
+    parser.add_argument("--build_dataset_only", action="store_true")
     parser.add_argument("--fast_dev_run", action="store_true")
     return parser.parse_args()
 
@@ -52,6 +53,7 @@ def selected_mode(args: argparse.Namespace) -> str:
         "audit_only": args.audit_only,
         "train_only": args.train_only,
         "eval_only": args.eval_only,
+        "build_dataset_only": args.build_dataset_only,
     }
     active = [name for name, enabled in flags.items() if enabled]
     if len(active) > 1:
@@ -240,14 +242,17 @@ def prepare_run(args: argparse.Namespace, mode: str) -> tuple[Path, Path, dict]:
             raise FileNotFoundError(f"Run directory not found: {run_dir}")
         init_run_structure(run_dir)
         resolved_config = run_dir / "config" / "resolved_config.yaml"
-        if not resolved_config.exists():
-            raise FileNotFoundError(f"Missing resolved config for resume_run: {resolved_config}")
-        config = load_config(resolved_config)
+        if mode == "build_dataset_only":
+            config = load_config(args.config)
+        else:
+            if not resolved_config.exists():
+                raise FileNotFoundError(f"Missing resolved config for resume_run: {resolved_config}")
+            config = load_config(resolved_config)
         config = apply_cli_overrides(config, args)
         if args.fast_dev_run:
             config = apply_fast_dev_config(config)
         config = configure_run_paths(config, run_dir)
-        config_path = resolved_config
+        config_path = Path(args.config) if mode == "build_dataset_only" else resolved_config
         resolved_config = persist_run_config_and_manifest(run_dir, config_path, config, mode, new_run=False)
         return run_dir, resolved_config, config
 
@@ -342,6 +347,9 @@ def record_raw_log_generation_provenance(run_dir: Path, metadata: dict) -> None:
         "raw_log_generator_function": metadata.get("raw_log_generator_function"),
         "raw_log_schema_version": metadata.get("raw_log_schema_version", "v1"),
         "risk_injection": metadata.get("risk_injection", "none"),
+        "cpu_precursor_enabled": metadata.get("cpu_precursor_enabled", False),
+        "cpu_precursor_episode_count": metadata.get("cpu_precursor_episode_count", 0),
+        "cpu_precursor_episodes_path": metadata.get("cpu_precursor_episodes_path"),
         "raw_log_files": raw_log_files,
         "python_executable": metadata.get("python_executable"),
         "python_version": metadata.get("python_version"),
@@ -373,7 +381,7 @@ def verify_attribution(config_path: str | Path) -> None:
     processed_dir = resolve_path(config, config["data"]["processed_dir"])
     labeled_path = processed_dir / "samples_labeled.pkl"
     samples = load_pickle(labeled_path)
-    required = {"risk_label", "risk_node", "risk_link", "risk_metric", "attr_mask"}
+    required = {"risk_label", "risk_node", "risk_link", "risk_metric", "risk_metric_scores", "attr_mask"}
     if not samples:
         raise RuntimeError(f"No labeled samples found in {labeled_path}")
     missing = required.difference(samples[0])
@@ -548,6 +556,42 @@ def run_generate_pipeline(run_dir: Path, config_path: Path, config: dict) -> Non
         raise RuntimeError(f"Generate pipeline missing outputs: {checked['missing_outputs']}")
 
 
+def backup_dataset(run_dir: Path) -> Path | None:
+    dataset_dir = run_dir / "dataset"
+    if not dataset_dir.exists():
+        return None
+    backup_dir = run_dir / "artifacts" / f"dataset_backup_{timestamp_now().replace(':', '').replace(' ', '_').replace('-', '')}"
+    shutil.copytree(dataset_dir, backup_dir)
+    return backup_dir
+
+
+def run_build_dataset_pipeline(run_dir: Path, config_path: Path, config: dict) -> None:
+    raw_dir = resolve_path(config, config["data"]["raw_logs_dir"])
+    if not raw_dir.exists():
+        raise FileNotFoundError(f"Cannot build dataset without existing raw logs: {raw_dir}")
+    backup_dir = backup_dataset(run_dir)
+    if backup_dir:
+        update_run_manifest(run_dir, {"last_dataset_backup": str(backup_dir), "last_updated_at": timestamp_now()})
+        print(f"[build_dataset_only] Backed up existing dataset to {backup_dir}", flush=True)
+    py = sys.executable
+    run_raw_log_schema_check(run_dir, config)
+    run_step("[2/6] Building path graph...", [py, "src/preprocessing/build_path_graph.py", "--config", str(config_path)])
+    mark_stage(run_dir, "build_path_graph")
+    run_step("[3/6] Generating labels...", [py, "src/preprocessing/generate_labels.py", "--config", str(config_path)])
+    print("[4/6] Generating attribution...", flush=True)
+    verify_attribution(config_path)
+    copy_processed_aliases(config_path)
+    mark_stage(run_dir, "generate_labels_attribution")
+    run_step("[5/6] Splitting dataset...", [py, "src/preprocessing/split_dataset.py", "--config", str(config_path)])
+    copy_label_stats(config_path)
+    mark_stage(run_dir, "split_dataset")
+    run_audit(run_dir, config)
+    checked = check_outputs_or_report(run_dir, REQUIRED_OUTPUTS_GENERATE)
+    if checked["missing_outputs"]:
+        update_run_manifest(run_dir, {"missing_outputs": checked["missing_outputs"]})
+        raise RuntimeError(f"Build-dataset pipeline missing outputs: {checked['missing_outputs']}")
+
+
 def required_dataset_files(run_dir: Path) -> list[Path]:
     return [run_dir / "dataset" / f"{split}.pkl" for split in ["train", "val", "test"]]
 
@@ -619,6 +663,20 @@ def main() -> None:
             run_eval_pipeline(run_dir, resolved_config)
             finish_manifest(run_dir)
             print("Eval-only pipeline finished.", flush=True)
+            return
+        if mode == "build_dataset_only":
+            run_build_dataset_pipeline(run_dir, resolved_config, config)
+            update_run_manifest(
+                run_dir,
+                {
+                    "risk_metric_scores_use_future_information": True,
+                    "used_as_supervision_only": True,
+                    "used_as_model_input": False,
+                    "last_updated_at": timestamp_now(),
+                },
+            )
+            finish_manifest(run_dir)
+            print("Build-dataset-only pipeline finished.", flush=True)
             return
 
         run_generate_pipeline(run_dir, resolved_config, config)

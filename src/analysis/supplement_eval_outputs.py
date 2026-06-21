@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.datasets.sparta_dataset import SPARTADataset
+from src.metrics import compute_attribution_metrics, compute_risk_auc_metrics
 from src.train import build_model, select_device
 from src.utils.config import load_config, resolve_path
 from src.utils.io import ensure_dir
@@ -62,12 +63,34 @@ RESULT_COLUMNS = [
     "risk_recall",
     "violation_recall",
     "auc",
+    "risk_auc_macro_ovr",
+    "risk_auc_weighted_ovr",
+    "risk_auc_binary",
+    "auc_error",
     "node_attr_acc",
     "link_attr_acc",
     "metric_attr_acc",
+    "metric_attr_macro_f1",
+    "metric_attr_balanced_acc",
+    "metric_attr_per_class_recall_delay",
+    "metric_attr_per_class_recall_loss",
+    "metric_attr_per_class_recall_cpu",
+    "metric_attr_per_class_recall_queue",
+    "metric_attr_per_class_recall_bandwidth",
     "inference_time_ms",
 ]
-ATTR_COLUMNS = {"node_attr_acc", "link_attr_acc", "metric_attr_acc"}
+ATTR_COLUMNS = {
+    "node_attr_acc",
+    "link_attr_acc",
+    "metric_attr_acc",
+    "metric_attr_macro_f1",
+    "metric_attr_balanced_acc",
+    "metric_attr_per_class_recall_delay",
+    "metric_attr_per_class_recall_loss",
+    "metric_attr_per_class_recall_cpu",
+    "metric_attr_per_class_recall_queue",
+    "metric_attr_per_class_recall_bandwidth",
+}
 
 
 if not SKLEARN_AVAILABLE:
@@ -293,6 +316,8 @@ def attribution_accuracy(labels: dict, preds: dict, field: str, has_attr: bool) 
 def build_result_row(run_dir: Path, model_name: str, checkpoint_path: Path, dataset_path: Path, eval_data: dict, result_path: Path) -> dict:
     y_true = eval_data["y_true"]
     y_pred = eval_data["y_pred"]
+    attr_metrics = compute_attribution_metrics(eval_data["labels"], eval_data["preds"], eval_data["has_attr"])
+    auc_metrics = compute_risk_auc_metrics(y_true, eval_data["y_score"])
     row = {
         "run_id": run_dir.name,
         "model": model_name,
@@ -307,10 +332,21 @@ def build_result_row(run_dir: Path, model_name: str, checkpoint_path: Path, data
         "balanced_acc": balanced_accuracy_score(y_true, y_pred),
         "risk_recall": recall_score(y_true, y_pred, labels=LABELS, average=None, zero_division=0)[1],
         "violation_recall": recall_score(y_true, y_pred, labels=LABELS, average=None, zero_division=0)[2],
-        "auc": safe_auc(y_true, eval_data["y_score"]),
-        "node_attr_acc": attribution_accuracy(eval_data["labels"], eval_data["preds"], "risk_node", eval_data["has_attr"]),
-        "link_attr_acc": attribution_accuracy(eval_data["labels"], eval_data["preds"], "risk_link", eval_data["has_attr"]),
-        "metric_attr_acc": attribution_accuracy(eval_data["labels"], eval_data["preds"], "risk_metric", eval_data["has_attr"]),
+        "auc": auc_metrics["auc"],
+        "risk_auc_macro_ovr": auc_metrics["risk_auc_macro_ovr"],
+        "risk_auc_weighted_ovr": auc_metrics["risk_auc_weighted_ovr"],
+        "risk_auc_binary": auc_metrics["risk_auc_binary"],
+        "auc_error": auc_metrics["auc_error"],
+        "node_attr_acc": attr_metrics["node_attr_acc"],
+        "link_attr_acc": attr_metrics["link_attr_acc"],
+        "metric_attr_acc": attr_metrics["metric_attr_acc"],
+        "metric_attr_macro_f1": attr_metrics["metric_attr_macro_f1"],
+        "metric_attr_balanced_acc": attr_metrics["metric_attr_balanced_acc"],
+        "metric_attr_per_class_recall_delay": attr_metrics["metric_attr_per_class_recall_delay"],
+        "metric_attr_per_class_recall_loss": attr_metrics["metric_attr_per_class_recall_loss"],
+        "metric_attr_per_class_recall_cpu": attr_metrics["metric_attr_per_class_recall_cpu"],
+        "metric_attr_per_class_recall_queue": attr_metrics["metric_attr_per_class_recall_queue"],
+        "metric_attr_per_class_recall_bandwidth": attr_metrics["metric_attr_per_class_recall_bandwidth"],
         "inference_time_ms": eval_data["inference_time_ms"],
     }
     return row
